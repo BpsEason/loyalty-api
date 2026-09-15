@@ -1,0 +1,70 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loyalty-app
+    restart: unless-stopped
+    working_dir: /var/www
+
+    volumes:
+      - ./:/var/www
+      - vendor:/var/www/vendor
+      - storage:/var/www/storage
+      - bootstrap-cache:/var/www/bootstrap/cache
+
+    ports:
+      - "8088:80"
+
+    environment:
+      DB_HOST: host.docker.internal
+      DB_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks:
+      - loyalty-network
+
+    command: >
+      sh -c "php artisan serve --host=0.0.0.0 --port=80"
+
+  redis:
+    image: redis:7-alpine
+    container_name: loyalty-redis
+    restart: unless-stopped
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - redis-data:/data
+
+    networks:
+      - loyalty-network
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  loyalty-network:
+    driver: bridge
+
+volumes:
+  vendor:
+    driver: local
+
+  storage:
+    driver: local
+
+  bootstrap-cache:
+    driver: local
+
+  redis-data:
+    driver: local

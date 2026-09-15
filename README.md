@@ -1,1546 +1,953 @@
-# Multi-Tenant Loyalty API
+# Multi-Tenant Loyalty & Point API Platform
 
-> **企業級多租戶會員點數 API，專注於高併發交易安全、資料一致性、API 冪等性與可擴充後端架構。**
+一套基於 **Laravel** 開發、以 **API First** 為核心的多租戶會員點數平台。
 
-本專案不是單純的 Laravel CRUD API。
+這個專案一開始可以很簡單：
 
-系統以「**點數交易不能重複、餘額不能錯誤、租戶資料不能互相存取、服務可以水平擴充**」為核心，針對企業級會員點數系統常見的併發、重試、資料一致性與多租戶隔離問題進行設計。
+```text
+Customer
+   ↓
+Point Balance
+```
 
-目前核心點數交易已採用 **Redis Distributed Lock + MySQL Transaction + Row-Level Lock** 的雙層併發控制架構，並以 Point Ledger 保存完整交易歷程。
+但當系統真的開始被 Website、Mobile App、POS、CRM 或其他第三方服務同時呼叫後，真正困難的就不再是 CRUD。
 
-後續架構將進一步擴充 **Idempotency、Point Lot / FIFO、Domain Events、Queue、Outbox Pattern 與 Tenant-aware Rate Limiting**。
+問題會變成：
+
+- 不同租戶的資料怎麼隔離？
+- 同一個會員同時被多個請求扣點，怎麼避免 Race Condition？
+- Client Timeout 後重新送出 Request，怎麼避免重複扣點？
+- 點數餘額與交易紀錄怎麼保持一致？
+- 發生問題時，怎麼追查每一筆點數異動？
+- 核心交易完成後，怎麼可靠地通知其他系統？
+
+因此，這個專案的重點不是「把 API 做出來」，而是逐步處理這些 **真實系統在高併發與多系統整合下會遇到的問題**。
 
 ---
 
-## 🎯 專案定位
+## 🎯 Project Goal
 
-```text
-Traditional CRUD API
-        │
-        ▼
-Multi-Tenant API
-        │
-        ▼
-Concurrent Transaction Safety
-        │
-        ▼
-Idempotent API
-        │
-        ▼
-Point Ledger / FIFO Expiration
-        │
-        ▼
-Event-Driven Processing
-        │
-        ▼
-Distributed & Scalable Backend
-```
-
-本專案希望展示的不是：
-
-> 「我會使用 Laravel 建立 CRUD。」
-
-而是：
-
-> **「我能從企業系統實際會遇到的問題出發，設計資料一致性、併發控制、重試安全與多租戶隔離機制。」**
-
----
-
-# 🚀 核心技術亮點
-
-## 01｜高併發點數交易安全
-
-點數系統最重要的不是「扣點 API 能不能執行」，而是：
-
-> **大量 Request 同時操作同一個會員時，點數仍然必須正確。**
-
-例如會員目前有：
-
-```text
-Balance = 100
-```
-
-同時收到 10 個：
-
-```text
-redeem(20)
-```
-
-如果沒有適當的併發控制，多個 Request 可能同時讀取：
-
-```text
-Balance = 100
-```
-
-造成 Lost Update，甚至讓帳戶餘額與交易紀錄不一致。
-
-因此 Point Service 採用兩層保護：
-
-```text
-HTTP Request
-      │
-      ▼
-Redis Distributed Lock
-      │
-      ▼
-DB Transaction
-      │
-      ▼
-SELECT ... FOR UPDATE
-      │
-      ▼
-Validate Balance
-      │
-      ▼
-Update Point Account
-      │
-      ▼
-Create Point Transaction
-      │
-      ▼
-Commit
-```
-
-### Redis Distributed Lock
-
-應用層先針對同一個會員取得 Distributed Lock：
-
-```php
-$lock = Cache::lock($lockKey, $lockTTL);
-
-return $lock->block($lockWaitSeconds, function () {
-    // Point transaction
-});
-```
-
-主要目的是讓多台 Application Server 在同一時間操作同一會員時，不會同時進入核心點數交易流程。
-
-### Database Row-Level Lock
-
-進入 Database Transaction 後，再使用：
-
-```php
-$account = $customer->pointAccount()
-    ->lockForUpdate()
-    ->first();
-```
-
-透過 MySQL Row-Level Lock 保護實際資料庫中的 Point Account。
-
-因此架構不是單純依賴 Redis：
-
-```text
-Redis Lock
-    ↓
-降低 Application-level contention
-
-DB Transaction + FOR UPDATE
-    ↓
-Database-level consistency
-```
-
-### 設計目標
-
-- 防止 Concurrent Redeem 造成負餘額
-- 防止 Lost Update
-- 確保 Point Account 更新具備 Transaction Atomicity
-- 確保 Point Transaction 與 Balance 同步成功或同步 rollback
-- 支援多台 Application Server 水平擴充
-
----
-
-# 02｜API Idempotency
-
-企業 API 必須假設：
-
-> **Request 可能因 Timeout、Network Error 或 Client Retry 而被重送。**
+這套系統希望成為一個可以被不同產品重複整合的 **Loyalty API Platform**。
 
 例如：
 
 ```text
-Client
-  │
-  │ POST /api/v1/rewards/1/redeem
-  │ X-Idempotency-Key: abc-123
-  ▼
-Server
-  │
-  ├── Execute redemption
-  ├── Deduct points
-  └── Create redemption
+                  ┌──────────────┐
+                  │   Website    │
+                  └──────┬───────┘
+                         │
+                  ┌──────▼───────┐
+                  │ Mobile App   │
+                  └──────┬───────┘
+                         │
+                  ┌──────▼───────┐
+                  │     POS      │
+                  └──────┬───────┘
+                         │
+                  ┌──────▼───────┐
+                  │     CRM      │
+                  └──────┬───────┘
+                         │
+                         ▼
+              ┌─────────────────────┐
+              │   Loyalty API       │
+              │      /api/v1        │
+              └──────────┬──────────┘
+                         │
+             ┌───────────┼───────────┐
+             ▼           ▼           ▼
+           MySQL       Redis       Queue
 ```
 
-如果 Client 沒有收到 Response，再次送出相同 Request：
-
-```text
-Client
-  │
-  └── Retry
-       │
-       ▼
-X-Idempotency-Key
-       │
-       ▼
-   Already processed?
-       │
-      YES
-       │
-       ▼
-Return original result
-```
-
-同一個業務操作即使被重試，也不應再次扣除點數。
-
-### 設計目標
-
-```text
-Same Request
-      │
-      ▼
-Same Idempotency Key
-      │
-      ▼
-Execute Once
-      │
-      ▼
-Return Same Result
-```
-
-Idempotency 與 Distributed Lock 負責的是不同問題：
-
-```text
-Distributed Lock
-→ 解決 Concurrent Execution
-
-Idempotency
-→ 解決 Duplicate Request / Retry
-```
-
-> **實作狀態：規劃／後續實作。**
+API 與前端 UI 分離，讓點數核心邏輯不依賴特定產品。
 
 ---
 
-# 03｜Point Ledger：完整點數交易歷程
+# 🧩 Core Problems
 
-系統不只儲存：
+本專案目前主要圍繞四個問題發展。
 
-```text
-balance = 500
-```
+### 1. Multi-Tenant Isolation
 
-而是保留完整的 Point Transaction Ledger。
+系統採用：
 
-例如：
+**Shared Database / Shared Tables**
 
-```text
-Point Account
-    │
-    ├── +100 Earn
-    ├── +200 Bonus
-    ├── -150 Redeem
-    ├── -50  Adjustment
-    └── ...
-```
-
-每筆交易包含：
-
-- Tenant
-- Customer
-- Point Account
-- Transaction Type
-- Amount
-- Balance Before
-- Balance After
-- Description
-- Reference
-- Operator
-- Created At
-
-例如：
-
-```text
-Balance Before : 500
-Transaction    : -150
-Balance After  : 350
-Type           : REDEEM
-```
-
-因此系統可以回答：
-
-> **「這個會員為什麼現在有 350 點？」**
-
-而不是只能知道：
-
-> 「目前餘額是 350。」
-
-### Ledger 的價值
-
-```text
-Point Account
-     │
-     └── Current Balance
-
-Point Transaction
-     │
-     ├── Earn
-     ├── Redeem
-     ├── Adjust
-     ├── Refund
-     └── Expire
-```
-
-Point Account 負責目前狀態。
-
-Point Transaction 負責歷史與稽核。
-
----
-
-# 04｜Point Lot / FIFO 點數到期
-
-當點數具有不同有效期限時，單純使用：
-
-```text
-customer.points
-```
-
-無法知道每一批點數什麼時候到期。
-
-因此後續可將點數拆分成不同 Point Lot：
-
-```text
-Point Lots
-
-Lot A
-100 points
-expires: 2026-10-01
-
-Lot B
-200 points
-expires: 2026-12-01
-
-Lot C
-300 points
-expires: 2027-01-01
-```
-
-當會員兌換：
-
-```text
-Redeem = 150
-```
-
-系統依照最早到期優先：
-
-```text
-Lot A
-100 → 0
-
-Lot B
-200 → 150
-```
-
-核心排序：
-
-```sql
-ORDER BY expired_at ASC
-```
-
-### 為什麼需要 Point Lot？
-
-因為：
-
-```text
-Balance = 600
-```
-
-本身無法回答：
-
-> 哪 100 點快到期？
-
-Point Lot 則可以：
-
-```text
-Balance
-   │
-   ├── Lot A → 100 → 2026-10-01
-   ├── Lot B → 200 → 2026-12-01
-   └── Lot C → 300 → 2027-01-01
-```
-
-大量過期資料可以再透過 Batch Job / Queue 分批處理，避免一次掃描大量資料造成資料庫壓力。
-
-> **實作狀態：規劃／後續實作。**
-
----
-
-# 05｜Event-Driven Architecture
-
-點數交易成功後，不應讓核心交易等待所有附加工作完成。
-
-例如：
-
-```text
-Point Transaction
-       │
-       ▼
-PointTransacted
-       │
-       ├── Notification
-       ├── Customer Tier
-       ├── Analytics
-       └── Audit
-```
-
-核心交易：
-
-```text
-扣點
- ↓
-更新 Balance
- ↓
-建立 Point Transaction
- ↓
-Commit
-```
-
-非核心工作：
-
-```text
-Notification
-Analytics
-Customer Tier
-External Integration
-```
-
-則交由 Queue 非同步處理。
-
-### 目的
-
-降低主要 API Request 的處理時間，同時避免：
-
-```text
-Notification Service
-       ↓
-       ✗
-       ↓
-Point Transaction
-       ↓
-       ✗
-```
-
-讓非核心服務故障直接影響核心點數交易。
+透過 `tenant_id` 區分不同租戶。
 
 核心原則：
 
-> **核心資料交易與非核心副作用分離。**
+```text
+Tenant A
+   │
+   ├── Customers
+   ├── Point Accounts
+   └── Transactions
 
-> **實作狀態：規劃／後續實作。**
+Tenant B
+   │
+   ├── Customers
+   ├── Point Accounts
+   └── Transactions
+```
 
----
-
-# 06｜Outbox Pattern
-
-單純：
+租戶隔離不是只依賴 Controller 判斷，而是由多個層級共同處理：
 
 ```text
-DB Transaction
+Authentication
       ↓
-Dispatch Event
+Tenant Context
+      ↓
+Authorization
+      ↓
+Model Scope
+      ↓
+Database Constraints
 ```
 
-仍然存在一致性風險。
-
-例如：
-
-```text
-DB Commit
-   ✓
-
-Event Dispatch
-   ✗
-```
-
-此時：
-
-```text
-Point Transaction = 成功
-Event = 遺失
-```
-
-因此可以使用 Outbox Pattern。
-
-```text
-┌────────────────────────────┐
-│       DB Transaction       │
-│                            │
-│ Point Transaction         │
-│ Point Account              │
-│ Outbox Event               │
-│                            │
-└─────────────┬──────────────┘
-              │
-            Commit
-              │
-              ▼
-        Outbox Worker
-              │
-              ▼
-           Queue
-              │
-       ┌──────┼──────┐
-       ▼      ▼      ▼
-   Notify    Tier  Analytics
-```
-
-Point Transaction 與 Outbox Event 在同一個 Database Transaction 中寫入。
-
-因此：
-
-```text
-Business Data
-      +
-Pending Event
-```
-
-具有相同的 Commit 邊界。
-
-後續 Worker 再負責將 Outbox Event 發送至 Queue 或其他外部系統。
-
-> **實作狀態：規劃／後續實作。**
+同時避免直接信任 Client 傳入的 `tenant_id`。
 
 ---
 
-# 07｜Tenant-Aware Rate Limiting
+# ⚡ Point System & Concurrency
 
-多租戶 SaaS 系統不能讓所有 Tenant 共用完全相同的資源限制。
+點數是這套系統最需要保護資料一致性的部分。
 
-例如：
+目前支援：
 
-```text
-Enterprise
-1000 requests / minute
+- Earn
+- Redeem
+- Refund
+- Adjust
+- Expire
 
-Standard
-300 requests / minute
-
-Basic
-100 requests / minute
-```
-
-Request 流程：
+基本流程：
 
 ```text
 Request
-   │
-   ▼
-JWT Authentication
-   │
-   ▼
-Tenant Context
-   │
-   ▼
-Tenant Plan
-   │
-   ├── Enterprise → 1000/min
-   ├── Standard   → 300/min
-   └── Basic      → 100/min
-```
-
-目的在於避免單一 Tenant 產生大量流量，進而影響其他 Tenant。
-
-這類問題通常稱為：
-
-> **Noisy Neighbor Problem**
-
-Tenant-aware Rate Limiting 將資源限制從：
-
-```text
-Global Limit
-```
-
-提升為：
-
-```text
-Tenant-aware Limit
-```
-
-> **實作狀態：規劃／後續實作。**
-
----
-
-# 🏗 系統架構
-
-整體目標架構：
-
-```text
-                         Load Balancer
-                              │
-                 ┌────────────┼────────────┐
-                 ▼            ▼            ▼
-              App #1       App #2       App #3
-                 │            │            │
-                 └────────────┼────────────┘
-                              │
-                         Redis Cluster
-                              │
-                 ┌────────────┼────────────┐
-                 │                         │
-          Distributed Lock            Idempotency
-                 │                         │
-                 └────────────┬────────────┘
-                              ▼
-                           MySQL 8
-                              │
-                    ┌─────────┴─────────┐
-                    │                   │
-               Transaction         Row-Level Lock
-                    │                   │
-                    └─────────┬─────────┘
-                              ▼
-                        Point Account
-                              │
-                              ▼
-                       Point Transaction
-                              │
-                              ▼
-                           Outbox
-                              │
-                              ▼
-                            Queue
-                              │
-                   ┌──────────┼──────────┐
-                   ▼          ▼          ▼
-               Notify       Tier     Analytics
-```
-
----
-
-# 🔐 Multi-Tenant Architecture
-
-本系統採用 Shared Database / Shared Schema 的多租戶架構。
-
-主要資料透過：
-
-```text
-tenant_id
-```
-
-進行 Tenant 隔離。
-
-概念：
-
-```text
-Tenant A
- ├── Customer
- ├── Point Account
- └── Point Transaction
-
-Tenant B
- ├── Customer
- ├── Point Account
- └── Point Transaction
-```
-
-所有 Tenant-aware 資料都必須確保：
-
-```text
-Tenant A
-   ✗
    ↓
-Tenant B Data
-```
-
-無法被跨租戶存取。
-
-Tenant Isolation 不只是 API 層判斷，也必須考慮：
-
-- Model Query
-- Relationship
-- Service
-- Transaction
-- Background Job
-- Queue Worker
-- Cache Key
-- Distributed Lock Key
-
----
-
-# 🔑 Authentication
-
-API 使用 JWT Authentication。
-
-```text
-Client
-  │
-  ▼
-JWT
-  │
-  ▼
-Authentication
-  │
-  ▼
-Tenant Context
-  │
-  ▼
-Authorization
-  │
-  ▼
-Business Service
-```
-
-API 與 Filament Admin 的 Authentication Context 分離：
-
-```text
-API
- └── JWT
-
-Admin Panel
- └── Web Session
-```
-
-避免 API Authentication 與後台管理登入機制互相耦合。
-
----
-
-# 🛡 Authorization
-
-系統具備角色與權限控制。
-
-主要角色：
-
-```text
-super_admin
-tenant_admin
-tenant_staff
-```
-
-概念：
-
-```text
-Authentication
-      ↓
-Who are you?
-
-Authorization
-      ↓
-What can you do?
-
-Tenant Isolation
-      ↓
-Which tenant data can you access?
-```
-
-三者分別處理：
-
-```text
-Authentication
-→ 身份驗證
-
-Authorization
-→ 操作權限
-
-Tenant Isolation
-→ 資料範圍
-```
-
----
-
-# 📊 Point Transaction Flow
-
-目前核心點數交易流程：
-
-```text
-API Request
-     │
-     ▼
-PointService
-     │
-     ▼
-Validate Amount
-     │
-     ▼
-Redis Distributed Lock
-     │
-     ▼
+Point Service
+   ↓
+Lock
+   ↓
 DB Transaction
-     │
-     ▼
-Get Point Account
-     │
-     ▼
-SELECT FOR UPDATE
-     │
-     ▼
+   ↓
+Lock Point Account Row
+   ↓
 Validate Balance
-     │
-     ▼
-Update Point Account
-     │
-     ▼
-Create Point Transaction
-     │
-     ▼
-Commit
-     │
-     ▼
-Return Transaction
-```
-
-支援的核心操作：
-
-```text
-Earn
-Redeem
-Adjust
-Refund
-Expire
+   ↓
+Update Balance
+   ↓
+Create Transaction Ledger
 ```
 
 ---
 
-# 🧾 Point Transaction Model
+## 🔒 Concurrent Redeem
 
-Point Transaction 使用 Ledger 思維保存點數異動。
-
-基本資料：
+假設會員目前有：
 
 ```text
-tenant_id
-customer_id
-point_account_id
-type
-amount
-balance_before
-balance_after
-description
-reference
-created_by
-created_at
+Balance = 100
 ```
 
-交易資料的核心目的：
+同一時間收到 10 個：
 
 ```text
-Current State
-     +
-Historical Record
-     +
-Auditability
+Redeem 20
 ```
 
----
-
-# ⚡ Concurrency Design
-
-本系統不只使用單一 Lock。
-
-而是：
+正確結果應該是：
 
 ```text
-Application Layer
-        │
-        ▼
-Redis Distributed Lock
-        │
-        ▼
-Database Layer
-        │
-        ▼
-Transaction
-        │
-        ▼
-SELECT FOR UPDATE
-```
-
-兩者責任不同：
-
-| 機制                   | 主要目的                             |
-| ---------------------- | ------------------------------------ |
-| Redis Distributed Lock | 多 Application Instance 間的競爭控制 |
-| DB Transaction         | 保證資料操作 Atomicity               |
-| `SELECT FOR UPDATE`    | 保護資料庫 Row-Level Consistency     |
-| Unique Constraint      | 防止資料重複                         |
-
-因此不把 Redis Lock 當成 Database Transaction 的替代品。
-
----
-
-# 🧪 Concurrency Testing
-
-高併發系統不能只測：
-
-```text
-Request A → Success
-```
-
-還需要測：
-
-```text
-Request A
-Request B
-Request C
-...
-Request N
-```
-
-同時操作相同 Point Account 時是否仍然正確。
-
-核心測試目標：
-
-### Concurrent Redeem
-
-```text
-Initial Balance = 100
-
-10 concurrent requests
-redeem(20)
-```
-
-預期：
-
-```text
-5 success
-5 failed
+5 requests  → Success
+5 requests  → Failed
 
 Final Balance = 0
-
-Balance < 0
-    never
-
-Lost Update
-    never
 ```
 
-### Concurrent Earn
+而不是：
 
 ```text
-Initial Balance = 0
-
-100 concurrent requests
-earn(10)
+100
+ ↓
+Request A reads 100
+Request B reads 100
+Request C reads 100
+...
+ ↓
+Concurrent Update
+ ↓
+Incorrect Balance
 ```
 
-預期：
+目前的 Point Service 使用多層保護：
+
+### Redis Distributed Lock
+
+限制同一會員的點數交易在短時間內互相競爭。
 
 ```text
-Final Balance = 1000
+Customer
+   ↓
+Redis Distributed Lock
 ```
 
-並確認：
+這一層主要處理多 Application Instance 下的跨程序同步。
+
+### Database Transaction
+
+Balance 更新與 Ledger 寫入放在同一個 Transaction：
 
 ```text
-Point Transactions = 100
-```
+BEGIN TRANSACTION
 
-### Concurrent Account Creation
-
-同一 Customer 同時進行第一次點數操作。
-
-預期：
-
-```text
-Point Account = 1
-```
-
-不得產生 duplicate account。
-
----
-
-# 🧱 Data Consistency
-
-核心點數操作必須滿足：
-
-```text
-Point Account Update
+Update Point Account
         +
-Point Transaction Create
+Create Point Transaction
+
+COMMIT
 ```
 
-必須在同一個 Database Transaction 中完成。
+任何一步失敗，都應該 Rollback。
 
-成功：
+### Database Row Lock
+
+在 Transaction 中鎖定 Point Account：
+
+```sql
+SELECT ...
+FOR UPDATE
+```
+
+讓資料庫本身成為最後一道一致性防線。
+
+因此目前的核心設計是：
 
 ```text
-Account ✓
-Transaction ✓
-Commit ✓
+Redis Lock
+     ↓
+DB Transaction
+     ↓
+SELECT ... FOR UPDATE
+     ↓
+Validate
+     ↓
+Update
+     ↓
+Ledger
 ```
 
-失敗：
+這裡的重點不是單純「用了 Redis」，而是：
 
-```text
-Account ✗
-Transaction ✗
-Rollback ✓
-```
-
-避免：
-
-```text
-Balance 已扣除
-        +
-Transaction 沒建立
-```
-
-這種資料不一致狀態。
+> **Redis 負責跨 Instance 的同步，Database Transaction 與 Row Lock 負責最終的資料一致性。**
 
 ---
 
-# 🧩 Technology Stack
+# 📒 Point Transaction Ledger
 
-| Technology    | Purpose                                       |
-| ------------- | --------------------------------------------- |
-| PHP 8.2+      | Backend Runtime                               |
-| Laravel 12    | API / Application Framework                   |
-| Filament 5.8  | Admin Panel                                   |
-| Livewire 4.4  | Filament UI                                   |
-| MySQL 8       | Relational Database                           |
-| Redis         | Distributed Lock / Cache / Future Idempotency |
-| JWT           | API Authentication                            |
-| Laravel Queue | Asynchronous Processing                       |
-| L5-Swagger    | API Documentation                             |
-
----
-
-# 📁 Project Structure
+點數不能只依賴目前的：
 
 ```text
-app/
-├── Filament/
-│   ├── Resources/
-│   ├── Pages/
-│   └── Widgets/
-│
-├── Http/
-│   ├── Controllers/
-│   ├── Middleware/
-│   └── Requests/
-│
-├── Models/
-│
-├── Services/
-│   └── Point/
-│       └── PointService.php
-│
-├── Support/
-│   └── Tenancy/
-│
-└── ...
-
-config/
-├── database.php
-├── cache.php
-├── queue.php
-└── ...
-
-database/
-├── migrations/
-├── seeders/
-└── factories/
-
-routes/
-├── api.php
-└── web.php
+balance = 100
 ```
 
-實際目錄與模組以目前專案程式碼為準。
+因為當資料發生異常時，只看 Balance 很難回答：
+
+> 「這 100 點到底是怎麼來的？」
+
+因此每一次點數異動都建立 Transaction Ledger。
+
+例如：
+
+```text
+Balance: 100
+
+       ↓ Redeem 30
+
+Transaction
+────────────────────
+Type:          REDEEM
+Amount:        -30
+Before:        100
+After:          70
+Customer:        123
+Created At:   ...
+────────────────────
+
+Balance: 70
+```
+
+Ledger 提供：
+
+- Transaction Traceability
+- Auditability
+- Balance Change History
+- 問題追查依據
+
+Point Account 負責目前狀態：
+
+```text
+Point Account
+    ↓
+Current Balance
+```
+
+Point Transaction 負責異動歷史：
+
+```text
+Point Transaction
+    ↓
+What happened?
+```
+
+兩者各自負責不同角色。
 
 ---
 
-# 📡 API Versioning
+# 🏗️ Architecture
 
-API 使用版本化路徑：
+目前採用：
+
+## Modular Monolith
+
+沒有一開始就為了「看起來像大型系統」而拆成 Microservices。
+
+目前更重要的是先建立清楚的模組與責任邊界：
+
+```text
+                    API
+                     │
+                     ▼
+              ┌─────────────┐
+              │ Middleware  │
+              │ Auth        │
+              │ Tenant      │
+              │ Permission  │
+              └──────┬──────┘
+                     │
+                     ▼
+              ┌─────────────┐
+              │ Controller  │
+              └──────┬──────┘
+                     │
+                     ▼
+              ┌─────────────┐
+              │ FormRequest │
+              └──────┬──────┘
+                     │
+                     ▼
+              ┌─────────────┐
+              │   Service   │
+              └──────┬──────┘
+                     │
+                     ▼
+              ┌─────────────┐
+              │    Model    │
+              └──────┬──────┘
+                     │
+                     ▼
+                   MySQL
+```
+
+Controller 不負責點數交易規則。
+
+核心業務邏輯集中在 Service Layer。
+
+例如：
+
+```text
+PointController
+      ↓
+PointService
+      ↓
+PointAccount
+      +
+PointTransaction
+```
+
+這樣未來即使 API、Queue 或其他入口需要執行點數交易，也不需要重新複製核心邏輯。
+
+---
+
+# 🛠️ Technology Stack
+
+| Category          | Technology           |
+| ----------------- | -------------------- |
+| Language          | PHP 8.2+             |
+| Framework         | Laravel 12           |
+| Admin Panel       | Filament 5.8         |
+| UI Runtime        | Livewire 4.4         |
+| Database          | MySQL 8              |
+| Cache / Lock      | Redis                |
+| Authentication    | JWT                  |
+| Queue             | Laravel Queue        |
+| API Documentation | L5-Swagger / OpenAPI |
+
+---
+
+# 🔐 Authentication
+
+API 與後台使用不同的 Authentication Context。
+
+```text
+API Client
+    ↓
+JWT
+    ↓
+/api/v1/*
+```
+
+後台：
+
+```text
+Admin User
+    ↓
+Filament
+    ↓
+Web Session
+    ↓
+/admin/*
+```
+
+API Authentication 與 Admin Session 不混用。
+
+---
+
+# 🌐 API Design
+
+API 採用版本化：
 
 ```text
 /api/v1
 ```
 
-例如：
+主要 API 領域包含：
 
 ```text
-/api/v1/...
+Authentication
+Customers
+Points
+Tenants
+Users
 ```
 
-API 版本化的目的：
-
-```text
-v1
- │
- ├── Client A
- ├── Client B
- └── Mobile App
-```
-
-未來可以在不破壞既有 Client 的情況下增加：
-
-```text
-v2
-```
+API 設計以外部系統可以直接使用為前提，而不是針對單一前端畫面設計。
 
 ---
 
-# 📚 API Documentation
+# 📖 API Documentation
 
-API 文件使用 Swagger / OpenAPI。
-
-文件入口：
+Swagger / OpenAPI 文件：
 
 ```text
 /api/documentation
 ```
 
-可透過 Swagger UI 查看：
-
-- API Endpoint
-- Request Parameters
-- Authentication
-- Response
-- Error Response
-- API Schema
+開發 API 時，文件會同步描述 Request、Response 與 Endpoint。
 
 ---
 
-# 🔄 API Error Handling
+# 🖥️ Admin Panel
 
-API 不應直接將內部 Exception 暴露給 Client。
+後台使用：
+
+```text
+Filament 5.8
++
+Livewire 4.4
+```
+
+主要用於：
+
+- Tenant Management
+- Customer Management
+- Point Account Management
+- Point Transaction Management
+- User / Permission Management
+
+Admin Panel 的角色是管理與操作介面。
+
+點數核心規則仍由 Service Layer 負責。
+
+---
+
+# 🚧 Reliability Roadmap
+
+這個專案不追求一次把所有企業級 Pattern 塞進去，而是按照實際問題逐步演進。
+
+| Phase   | Focus                                                                                    | Status          |
+| ------- | ---------------------------------------------------------------------------------------- | --------------- |
+| Phase 1 | Multi-Tenant / JWT / Customer / Point Account / Ledger / Base API                        | **Implemented** |
+| Phase 2 | Redis Distributed Lock / DB Row Lock / Transaction / Idempotency-Key / Concurrency Tests | **In Progress** |
+| Phase 3 | Point Lot / FIFO / Point Expiration / Batch Job                                          | **Planned**     |
+| Phase 4 | Domain Events / Queue / Event-Driven Processing                                          | **Planned**     |
+| Phase 5 | Outbox Pattern / Webhook / Retry / Signature Verification                                | **Planned**     |
+| Phase 6 | Tenant-aware Rate Limiting / Observability / Scalability                                 | **Planned**     |
+
+其中一個重要原則：
+
+> **Implemented 才代表目前 Code 已經具備。Planned 只代表設計方向，不代表功能已經完成。**
+
+---
+
+# 🔁 Idempotency
+
+下一階段會處理 API Retry 問題。
+
+例如 Client：
+
+```text
+POST /api/v1/points/redeem
+
+Request
+   ↓
+Server successfully processes
+   ↓
+Network Timeout
+   ↓
+Client retries
+```
+
+如果沒有 Idempotency：
+
+```text
+Redeem 100
+     +
+Redeem 100
+```
+
+同一筆操作可能被執行兩次。
+
+預計透過：
+
+```text
+Idempotency-Key
+```
+
+讓同一個業務請求可以安全 Retry。
+
+例如：
+
+```http
+Idempotency-Key: 8f3a...
+```
+
+這會與目前的 Concurrency Control 分開處理：
+
+```text
+Concurrency
+→ 防止同時交易造成 Race Condition
+
+Idempotency
+→ 防止同一個 Request 被重複執行
+```
+
+兩者解決的是不同問題。
+
+---
+
+# 🧮 Point Lifecycle
+
+下一階段會把目前單純的 Balance 模型進一步延伸成 Point Lot。
 
 概念：
 
 ```text
-Business Exception
-       │
-       ▼
-Exception Handler
-       │
-       ▼
-Standard API Response
+Earn 100
+   ↓
+Lot A
+100 points
+Expires: 2027-01-01
+
+Earn 50
+   ↓
+Lot B
+50 points
+Expires: 2027-06-01
 ```
 
-例如點數不足：
+Redeem 時：
 
-```json
-{
-    "success": false,
-    "message": "點數餘額不足"
-}
+```text
+Available Lots
+      ↓
+FIFO
+      ↓
+Lot A
+      ↓
+Lot B
 ```
 
-讓 API Client 不需要理解 Laravel 內部 Exception。
+讓系統可以進一步處理：
+
+- 不同批次點數
+- 點數到期日
+- FIFO 扣點
+- 批次過期
+- 大量會員點數過期 Job
 
 ---
 
-# 📈 Scalability Design
+# 📡 Event-Driven Architecture
 
-系統架構以水平擴充為目標：
-
-```text
-                Load Balancer
-                     │
-       ┌─────────────┼─────────────┐
-       ▼             ▼             ▼
-    App #1         App #2         App #3
-       │             │             │
-       └─────────────┼─────────────┘
-                     │
-                  Redis
-                     │
-                  MySQL
-```
-
-Application Server 不依賴 Local Memory 保存重要交易狀態。
-
-因此可以：
+當核心交易越來越複雜後，不希望：
 
 ```text
-App #1
-App #2
-App #3
-...
-App #N
+Redeem Point
+    ↓
+Update DB
+    ↓
+Send Email
+    ↓
+Call CRM
+    ↓
+Call Webhook
+    ↓
+Analytics
 ```
 
-水平增加 Application Instance。
+全部塞在同一個 HTTP Request。
 
-Redis 則負責跨 Application Instance 共用的：
+未來會逐步導入：
 
-- Distributed Lock
-- Cache
-- Future Idempotency Storage
-- Queue-related Infrastructure
+```text
+Point Transaction
+       ↓
+Domain Event
+       ↓
+Queue
+       ├── Notification
+       ├── CRM Sync
+       ├── Analytics
+       └── Webhook
+```
+
+核心交易完成後，再由非同步 Worker 處理其他工作。
 
 ---
 
-# ⚠️ Failure Scenarios
+# 📦 Outbox Pattern
 
-企業級系統必須考慮的不只是正常流程。
-
-本專案設計時會考慮：
-
-### Client Retry
+如果未來使用 Event / Queue / Webhook，還會遇到另一個問題：
 
 ```text
-Request
-   ↓
-Server processing
-   ↓
-Network timeout
-   ↓
-Client retry
-```
-
-→ Idempotency
-
-### Concurrent Requests
-
-```text
-Request A ─┐
-Request B ─┤
-Request C ─┤→ Same Point Account
-Request D ─┘
-```
-
-→ Distributed Lock + Row-Level Lock
-
-### Database Failure
-
-```text
-Update Account
+DB Transaction
       ↓
-Create Transaction
+COMMIT
       ↓
-Database Error
+Queue publish failed
 ```
 
-→ DB Transaction Rollback
+資料已經成功寫入，但 Event 沒有送出去。
 
-### Event Failure
+因此後續會評估 Outbox Pattern：
 
 ```text
-DB Commit ✓
-Event ✗
+┌─────────────────────────┐
+│      DB Transaction     │
+│                         │
+│ Point Transaction       │
+│ Outbox Event            │
+└────────────┬────────────┘
+             │
+           COMMIT
+             │
+             ▼
+       Outbox Worker
+             │
+             ▼
+      Queue / Webhook
 ```
 
-→ Outbox Pattern
+讓「資料更新」與「待發送事件」可以在同一個 Database Transaction 中建立。
 
-### Noisy Neighbor
+---
+
+# 🚦 Tenant-aware Rate Limiting
+
+多租戶系統除了資料隔離，也需要避免某一個 Tenant 大量消耗系統資源。
+
+未來會加入 Tenant-aware Rate Limiting：
 
 ```text
 Tenant A
-大量 Request
-     ↓
-影響 Tenant B
+1000 req/min
+      ↓
+Allowed
+
+Tenant B
+100000 req/min
+      ↓
+Rate Limited
 ```
 
-→ Tenant-aware Rate Limiting
+重點不是單純限制 IP，而是讓不同 Tenant 可以有不同的資源使用策略。
 
 ---
 
-# 🗺 Roadmap
+# 🧪 Testing Strategy
 
-本專案不是一次加入所有 Enterprise Pattern，而是逐階段強化。
+這個專案的測試重點不只放在 CRUD。
 
-## Phase 1 — Point Transaction Concurrency
+尤其會驗證：
 
-**核心優先級：最高**
+### Point Correctness
 
 ```text
-✓ Redis Distributed Lock
-✓ DB Transaction
-✓ SELECT FOR UPDATE
-✓ Balance Validation
-✓ Point Ledger
-✓ Concurrent Safety Tests
+Earn
+Redeem
+Refund
+Adjust
+Expire
 ```
+
+### Transaction Safety
+
+```text
+Update Balance
++
+Create Ledger
+```
+
+其中任何一步失敗，都應該 Rollback。
+
+### Concurrency
+
+例如：
+
+```text
+Initial Balance = 100
+
+10 concurrent requests
+Redeem 20
+```
+
+預期：
+
+```text
+Success = 5
+Failed  = 5
+Balance = 0
+```
+
+### Tenant Isolation
+
+驗證：
+
+```text
+Tenant A
+   X
+Tenant B Data
+```
+
+任何跨租戶資料存取都應該被阻止。
 
 ---
 
-## Phase 2 — API Idempotency
+# 🧠 Development Philosophy
 
-```text
-□ Idempotency-Key
-□ Request Fingerprint
-□ Duplicate Request Detection
-□ Original Response Replay
-□ Idempotency Expiration
-```
+## 1. Correctness First
 
-目標：
-
-> 同一個業務操作即使被 Client Retry，也不會重複扣點。
-
----
-
-## Phase 3 — Point Lot / FIFO
-
-```text
-□ Point Lot
-□ Expiration Date
-□ FIFO Consumption
-□ Partial Lot Consumption
-□ Batch Expiration
-□ Expiration Queue
-```
-
-目標：
-
-> 正確處理不同批次、不同到期時間的點數。
-
----
-
-## Phase 4 — Domain Events / Queue
-
-```text
-□ PointTransacted Event
-□ Queue Job
-□ Notification
-□ Customer Tier Update
-□ Analytics Processing
-```
-
-目標：
-
-> 將核心交易與非核心工作解耦。
-
----
-
-## Phase 5 — Outbox Pattern
-
-```text
-□ Outbox Events
-□ Outbox Worker
-□ Retry Mechanism
-□ Failed Event Handling
-□ Event Delivery Tracking
-```
-
-目標：
-
-> 降低 Database Transaction 與 Event Delivery 之間的一致性風險。
-
----
-
-## Phase 6 — Tenant-aware Rate Limiting
-
-```text
-□ Tenant Rate Limit
-□ Plan-based Limit
-□ Redis-based Counter
-□ Noisy Neighbor Protection
-```
-
-目標：
-
-> 避免單一 Tenant 的流量影響其他 Tenant。
-
----
-
-# 🧠 Engineering Principles
-
-本專案遵循以下原則：
-
-### 1. Database 是最終資料一致性的依據
-
-Redis Lock 是併發控制工具，不是資料庫 Transaction 的替代品。
-
-```text
-Redis Lock
-     ↓
-Concurrency Control
-
-Database Transaction
-     ↓
-Data Consistency
-```
-
-### 2. Business Logic 集中於 Service Layer
-
-例如點數交易：
-
-```text
-Controller
-    ↓
-PointService
-    ↓
-Model / Database
-```
-
-Controller 不直接處理：
-
-```text
-Balance Update
-Ledger Creation
-Concurrency Lock
-```
-
-避免 Business Logic 散落於 Controller。
-
-### 3. 不為了架構而架構
-
-只有在有明確問題時才導入：
-
-```text
-Redis Lock
-Idempotency
-Queue
-Outbox
-Rate Limiting
-```
-
-每一個 Pattern 都必須能回答：
-
-> **「它解決了什麼實際問題？」**
-
-### 4. 優先保證資料正確，再追求效能
-
-點數系統：
+點數系統最重要的不是快，而是不能算錯。
 
 ```text
 Correctness
     ↓
 Consistency
     ↓
-Concurrency Safety
+Security / Isolation
     ↓
 Performance
 ```
 
-不能為了追求效能犧牲點數資料正確性。
+---
+
+## 2. API First
+
+API 的使用者不是只有自己的前端。
+
+設計時會假設：
+
+```text
+Website
+Mobile App
+POS
+CRM
+Third-party System
+```
+
+都可能成為 Client。
 
 ---
 
-# 🎯 Project Highlights
+## 3. Minimal Change
 
-本專案最希望展示的能力：
+遇到問題時：
 
 ```text
-┌───────────────────────────────────────┐
-│       Enterprise Loyalty API          │
-├───────────────────────────────────────┤
-│                                       │
-│  Multi-Tenant Architecture            │
-│                                       │
-│  High Concurrency                     │
-│                                       │
-│  Distributed Lock                    │
-│                                       │
-│  Database Transaction                 │
-│                                       │
-│  Row-Level Lock                       │
-│                                       │
-│  Point Ledger                         │
-│                                       │
-│  Idempotent API                       │
-│                                       │
-│  FIFO Point Expiration                │
-│                                       │
-│  Event-Driven Architecture            │
-│                                       │
-│  Outbox Pattern                       │
-│                                       │
-│  Tenant-aware Rate Limiting           │
-│                                       │
-└───────────────────────────────────────┘
+Inspect
+  ↓
+Trace
+  ↓
+Verify
+  ↓
+Modify
+  ↓
+Test
 ```
+
+先找到真正原因，再做最小且正確的修改。
+
+不因為一個 Bug 就重寫整個架構。
 
 ---
 
-# 💡 Why This Project?
+## 4. Do Not Guess
 
-很多後端作品集可以完成：
+這是這個專案非常重要的開發原則。
 
-```text
-Login
-CRUD
-Role
-Permission
-API
-Swagger
-```
-
-但真正進入 Production Environment 後，還會遇到：
+不根據：
 
 ```text
-Concurrent Requests
-       ↓
-Race Condition
-
-Network Retry
-       ↓
-Duplicate Request
-
-Distributed Servers
-       ↓
-Shared State
-
-Point Expiration
-       ↓
-Batch / FIFO
-
-Async Processing
-       ↓
-Queue
-
-Database / Event Failure
-       ↓
-Consistency Problem
-
-Multiple Tenants
-       ↓
-Noisy Neighbor
+「應該是這樣」
+「Laravel 通常會這樣」
+「我猜問題在這裡」
 ```
 
-因此本專案將這些問題作為主要工程練習。
+直接修改 Code。
+
+而是：
+
+```text
+Inspect actual code
+        ↓
+Trace actual execution
+        ↓
+Verify actual behavior
+        ↓
+Modify
+        ↓
+Run tests
+```
+
+**Code、Database、Runtime、Logs 才是判斷依據。**
 
 ---
 
-# 🏁 Final Goal
+## 5. Documentation Must Match Reality
 
-最終希望將系統從：
+README 不應該比程式碼更先進。
 
 ```text
-CRUD Application
+Implemented
+→ Code 已存在並經過驗證
+
+In Progress
+→ 正在實作
+
+Planned
+→ 設計方向，尚未實作
 ```
 
-逐步提升為：
+因此這份 README 會隨實際開發進度更新，而不是先把所有架構都寫成「已完成」。
+
+---
+
+# 📁 Project Structure
+
+目前專案以 Laravel 標準結構與業務責任分層：
 
 ```text
-Enterprise-oriented Backend System
+app/
+├── Http/
+│   ├── Controllers/
+│   ├── Requests/
+│   └── Resources/
+│
+├── Models/
+│
+├── Services/
+│
+├── Support/
+│
+└── ...
+
+config/
+database/
+routes/
+resources/
+storage/
+tests/
 ```
 
-核心能力：
+實際目錄與模組以目前 Repository 為準，不額外假設不存在的資料夾或文件。
+
+---
+
+# 🚀 Development Direction
+
+這個專案接下來的重點不是增加更多 CRUD，而是逐步把核心交易能力做深：
 
 ```text
-Multi-Tenancy
-      +
-High Concurrency
-      +
-Data Consistency
-      +
+                    Loyalty Platform
+                           │
+             ┌─────────────┼─────────────┐
+             │             │             │
+        Multi-Tenant   Point Engine   API Reliability
+             │             │             │
+             │             │             ├── Idempotency
+             │             │             └── Rate Limit
+             │             │
+             │             ├── Concurrency
+             │             ├── Ledger
+             │             └── Point Lot
+             │
+             └── Tenant Isolation
+
+                           ↓
+
+                    Event / Queue
+                           ↓
+                    External Systems
+```
+
+最終希望建立的不是一個「功能很多的 CRUD 專案」，而是一個可以持續演進、能處理實際交易一致性問題，並且方便其他系統整合的 **Loyalty API Platform**。
+
+---
+
+## 📌 Project Status
+
+目前專案已建立：
+
+- Multi-Tenant 基礎架構
+- JWT API Authentication
+- Filament Admin Panel
+- Versioned REST API
+- Customer / Point Account / Point Transaction
+- Point Ledger
+- Redis Distributed Lock
+- Database Transaction
+- Database Row Lock
+- Tenant Isolation
+- API Documentation
+
+接下來的核心工作：
+
+```text
+Concurrency
+      ↓
 Idempotency
-      +
-Point Ledger
-      +
-FIFO Expiration
-      +
-Distributed Lock
-      +
-Event-Driven Architecture
-      +
-Outbox Pattern
-      +
-Tenant-aware Rate Limiting
+      ↓
+Point Lot / FIFO
+      ↓
+Domain Events
+      ↓
+Outbox
+      ↓
+Rate Limiting
+      ↓
+Observability
 ```
 
-最終目標不是堆疊技術名詞，而是讓每一個架構決策都能回答：
-
-> **遇到什麼問題？**
-
-> **為什麼選這個方案？**
-
-> **如何保證正確？**
-
-> **失敗時會發生什麼？**
-
-> **如何透過測試證明設計有效？**
-
-這也是本專案最核心的工程價值。
+這些能力會以實際 Code、測試與驗證結果逐步加入，而不是只停留在架構圖上。
