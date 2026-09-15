@@ -1,0 +1,75 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Policies;
+
+use Illuminate\Foundation\Auth\User as AuthUser;
+use App\Models\PointAccount;
+use Illuminate\Auth\Access\HandlesAuthorization;
+
+class PointAccountPolicy
+{
+    use HandlesAuthorization;
+    
+    public function viewAny(AuthUser $authUser): bool
+    {
+        return $authUser->can('ViewAny:PointAccount');
+    }
+
+    public function view(AuthUser $authUser, PointAccount $pointAccount): bool
+    {
+        return $authUser->can('View:PointAccount');
+    }
+
+    public function create(AuthUser $authUser): bool
+    {
+        return $authUser->can('Create:PointAccount');
+    }
+
+    public function update(AuthUser $authUser, PointAccount $pointAccount): bool
+    {
+        return $authUser->can('Update:PointAccount');
+    }
+
+    public function delete(AuthUser $authUser, PointAccount $pointAccount): bool
+    {
+        return $authUser->can('Delete:PointAccount');
+    }
+
+    public function deleteAny(AuthUser $authUser): bool
+    {
+        return $authUser->can('DeleteAny:PointAccount');
+    }
+
+    public function restore(AuthUser $authUser, PointAccount $pointAccount): bool
+    {
+        return $authUser->can('Restore:PointAccount');
+    }
+
+    public function forceDelete(AuthUser $authUser, PointAccount $pointAccount): bool
+    {
+        return $authUser->can('ForceDelete:PointAccount');
+    }
+
+    public function forceDeleteAny(AuthUser $authUser): bool
+    {
+        return $authUser->can('ForceDeleteAny:PointAccount');
+    }
+
+    public function restoreAny(AuthUser $authUser): bool
+    {
+        return $authUser->can('RestoreAny:PointAccount');
+    }
+
+    public function replicate(AuthUser $authUser, PointAccount $pointAccount): bool
+    {
+        return $authUser->can('Replicate:PointAccount');
+    }
+
+    public function reorder(AuthUser $authUser): bool
+    {
+        return $authUser->can('Reorder:PointAccount');
+    }
+
+}
