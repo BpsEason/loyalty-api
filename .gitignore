@@ -1,0 +1,106 @@
+```gitignore
+# =========================
+# Laravel
+# =========================
+
+*.log
+.env
+.env.backup
+.env.production
+.env.local
+.env.testing
+
+# Laravel storage
+/storage/*.key
+/storage/pail
+
+# Laravel generated files
+/public/storage
+
+# Laravel cache / framework generated files
+/bootstrap/cache/*.php
+
+# =========================
+# Dependencies
+# =========================
+
+/vendor
+/node_modules
+
+# =========================
+# Frontend / Vite
+# =========================
+
+/public/build
+/public/hot
+
+# =========================
+# Filament
+# =========================
+
+/public/css/filament
+/public/fonts/filament
+/public/js/filament
+
+# =========================
+# Testing
+# =========================
+
+.phpunit.result.cache
+/.phpunit.cache
+
+# =========================
+# IDE / Editor
+# =========================
+
+/.fleet
+/.idea
+/.nova
+/.vscode
+/.zed
+.phpactor.json
+
+# =========================
+# Composer
+# =========================
+
+/auth.json
+
+# =========================
+# OS
+# =========================
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# =========================
+# Environment / Local files
+# =========================
+
+Homestead.json
+Homestead.yaml
+
+# =========================
+# Temporary / Runtime files
+# =========================
+
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# =========================
+# Local development
+# =========================
+
+/public/debugbar
+/.php-cs-fixer.cache
+
+# =========================
+# IDE / Project metadata
+# =========================
+
+.phpstorm.meta.php
+```
