@@ -23,7 +23,7 @@ class PointTransactionController extends Controller
     }
 
     #[OA\Get(
-        path: "/api/v1/customers/{customer}/point-transactions",
+        path: "/customers/{customer}/point-transactions",
         summary: "Get list of point transactions for a customer",
         security: [["bearerAuth" => []]],
         parameters: [
@@ -54,7 +54,7 @@ class PointTransactionController extends Controller
     }
 
     #[OA\Get(
-        path: "/api/v1/customers/{customer}/point-transactions/{pointTransaction}",
+        path: "/customers/{customer}/point-transactions/{pointTransaction}",
         summary: "Get a specific point transaction",
         security: [["bearerAuth" => []]],
         parameters: [
@@ -94,7 +94,7 @@ class PointTransactionController extends Controller
     }
 
     #[OA\Post(
-        path: "/api/v1/customers/{customer}/point-transactions",
+        path: "/customers/{customer}/point-transactions",
         summary: "Create a new point transaction",
         security: [["bearerAuth" => []]],
         parameters: [

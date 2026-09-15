@@ -22,7 +22,7 @@ class CustomerController extends Controller
     }
 
     #[OA\Get(
-        path: "/api/v1/customers",
+        path: "/customers",
         summary: "Get list of customers",
         security: [["bearerAuth" => []]],
         responses: [
@@ -50,7 +50,7 @@ class CustomerController extends Controller
     }
 
     #[OA\Post(
-        path: "/api/v1/customers",
+        path: "/customers",
         summary: "Create a new customer",
         security: [["bearerAuth" => []]],
         requestBody: new OA\RequestBody(
@@ -102,7 +102,7 @@ class CustomerController extends Controller
     }
 
     #[OA\Get(
-        path: "/api/v1/customers/{customer}",
+        path: "/customers/{customer}",
         summary: "Get a specific customer",
         security: [["bearerAuth" => []]],
         parameters: [
@@ -143,7 +143,7 @@ class CustomerController extends Controller
     }
 
     #[OA\Put(
-        path: "/api/v1/customers/{customer}",
+        path: "/customers/{customer}",
         summary: "Update a customer",
         security: [["bearerAuth" => []]],
         parameters: [
@@ -193,7 +193,7 @@ class CustomerController extends Controller
     }
 
     #[OA\Delete(
-        path: "/api/v1/customers/{customer}",
+        path: "/customers/{customer}",
         summary: "Delete a customer",
         security: [["bearerAuth" => []]],
         parameters: [

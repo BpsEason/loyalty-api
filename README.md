@@ -1,69 +1,85 @@
-# Multi-Tenant Loyalty API
+# 多租戶會員點數 API
 
-A scalable multi-tenant loyalty and points management API built with Laravel 12.
+一套以 **Laravel 12** 建構的可擴充多租戶會員點數管理 API。
 
-This project provides a reusable backend architecture for businesses that need to manage multiple tenants, customers, points, rewards, and redemptions through a unified API.
+本專案提供一套可重複使用的後端架構，讓企業能透過統一的 API 管理：
 
-The project also includes a Filament v4 administration panel for managing system data.
+- 多租戶
+- 使用者與租戶權限
+- 會員
+- 點數帳戶
+- 點數交易
+- 點數取得與兌換
+- 點數規則
+- 獎勵
+- 獎勵兌換
+- 租戶資料隔離
+
+專案同時提供 **Filament 5 後台管理介面**以及 **OpenAPI / Swagger API 文件**。
 
 ---
 
-## ✨ Features
+## ✨ 功能特色
 
-- Multi-Tenant Architecture
-- JWT Authentication
+- 多租戶架構
+- 租戶資料隔離
+- JWT 身分驗證
 - RESTful API
-- Customer Management
-- Point Account Management
-- Point Transaction Ledger
-- Point Earn / Redeem
-- Reward Management
-- Reward Redemption
-- Tenant Data Isolation
-- Filament v4 Admin Panel
-- Livewire-powered Admin UI
-- OpenAPI / Swagger API Documentation
-- Feature & Unit Testing
-- Activity Logging
+- API 版本控制
+- 會員管理
+- 點數帳戶管理
+- 點數交易帳本
+- 點數取得 / 兌換
+- 點數規則管理
+- 獎勵管理
+- 獎勵兌換
+- 活動紀錄
+- Filament 5 後台管理介面
+- Livewire 4 後台 UI
+- OpenAPI / Swagger API 文件
+- Feature / Unit 測試
 
 ---
 
-## 🛠 Tech Stack
+## 🛠 技術堆疊
 
-| Technology        | Version             |
-| ----------------- | ------------------- |
-| PHP               | 8.2+                |
-| Laravel           | 12                  |
-| Filament          | 4                   |
-| Livewire          | 3                   |
-| JWT Auth          | tymon/jwt-auth      |
-| API Documentation | L5-Swagger          |
-| Database          | MySQL 8             |
-| Admin UI          | Filament + Livewire |
+| 技術     | 版本               |
+| -------- | ------------------ |
+| PHP      | 8.2+               |
+| Laravel  | 12.x               |
+| Filament | 5.8.1              |
+| Livewire | 4.4                |
+| JWT Auth | tymon/jwt-auth 2.x |
+| API 文件 | L5-Swagger 11.x    |
+| 資料庫   | MySQL 8            |
 
 ---
 
-## 🏗 Architecture
+## 🏗 系統架構
 
-The project uses a **Shared Database + Shared Tables + `tenant_id`** multi-tenant architecture.
+本專案採用：
+
+**共用資料庫 + 共用資料表 + `tenant_id`**
+
+的多租戶架構。
 
 ```text
                          Laravel 12
                              │
-              ┌──────────────┴──────────────┐
-              │                             │
-              ▼                             ▼
-       Filament v4                    RESTful API
-              │                             │
-          Livewire                         JWT
-              │                             │
-              └──────────────┬──────────────┘
+             ┌───────────────┴───────────────┐
+             │                               │
+             ▼                               ▼
+        Filament 5                       RESTful API
+             │                               │
+        Livewire 4                           JWT
+             │                               │
+             └───────────────┬───────────────┘
                              │
                              ▼
-                      Tenant Context
+                       租戶 Context
                              │
                              ▼
-                       Authorization
+                          授權
                              │
                              ▼
                          Services
@@ -75,72 +91,74 @@ The project uses a **Shared Database + Shared Tables + `tenant_id`** multi-tenan
                           MySQL 8
 ```
 
-Both the API and Filament administration panel use the same application services and business rules.
+API 與 Filament 後台共用相同的應用程式服務與商業規則。
 
-This prevents business logic from being duplicated between the API and admin panel.
+這樣可以避免 API 與後台各自實作一套不同的商業邏輯。
 
 ---
 
-## 🏢 Multi-Tenancy
+## 🏢 多租戶架構
 
-Tenant isolation is one of the core principles of this project.
+租戶資料隔離是本專案的核心安全機制之一。
 
-The application uses:
+系統採用：
 
 ```text
-Shared Database
-        +
-Shared Tables
-        +
+共用資料庫
+    +
+共用資料表
+    +
 tenant_id
 ```
 
-Tenant-specific resources contain a `tenant_id` column.
+需要進行租戶隔離的資源會包含 `tenant_id` 欄位。
 
-Example:
+例如：
 
 ```text
-Tenant
- ├── Users
- ├── Customers
- │    └── Point Account
- │         └── Point Transactions
- ├── Point Rules
- ├── Rewards
- └── Reward Redemptions
+租戶
+├── 使用者
+├── 會員
+│   └── 點數帳戶
+│       └── 點數交易
+├── 點數規則
+├── 獎勵
+└── 獎勵兌換
 ```
 
-A user belonging to Tenant A must never be able to access Tenant B's resources.
+Tenant A 的使用者不應該能夠存取 Tenant B 的資料。
 
-The tenant is resolved from the authenticated user and stored in a central `TenantContext`.
+租戶資訊會從已驗證的使用者與租戶機制中解析，並維護於中央 `TenantContext`。
 
 ```text
-JWT Authentication
-        ↓
-Authenticated User
-        ↓
+身分驗證
+    ↓
+已驗證使用者
+    ↓
 TenantResolver
-        ↓
+    ↓
 TenantContext
-        ↓
-Authorization
-        ↓
+    ↓
+授權
+    ↓
 Controller
-        ↓
+    ↓
 Service
-        ↓
-Database
+    ↓
+Eloquent
+    ↓
+資料庫
 ```
 
-Tenant IDs should not be trusted from client requests to determine the data scope.
+不可信任 Client 直接提供的 `tenant_id` 作為資料存取範圍。
 
 ---
 
-## 🔐 Authentication
+## 🔐 身分驗證
 
-The API uses JWT authentication.
+RESTful API 使用 **JWT** 進行身分驗證。
 
-Authentication endpoints:
+### 認證 API
 
 ```http
 POST /api/v1/auth/login
@@ -149,60 +167,81 @@ POST /api/v1/auth/refresh
 GET  /api/v1/auth/me
 ```
 
-Authenticated requests use:
+需要驗證的 API Request 必須帶入：
 
 ```http
 Authorization: Bearer {token}
 ```
 
----
+### 後台身分驗證
 
-## 🎯 Loyalty System
-
-The loyalty system is based on a point ledger.
-
-A customer's current balance is stored in `point_accounts`, while every point change is recorded in `point_transactions`.
+Filament 後台使用 **Web Session** 進行身分驗證。
 
 ```text
-Customer
-    │
-    ▼
-Point Account
-    │
-    ├── Earn
-    ├── Redeem
-    ├── Adjustment
-    ├── Refund
-    ├── Bonus
-    └── Expire
-            │
-            ▼
-    Point Transaction
+API
+ ↓
+JWT
+ ↓
+RESTful API
+
+
+後台
+ ↓
+Web Session
+ ↓
+Filament
 ```
 
-The system does not rely only on the current balance.
-
-Every point change creates a transaction record containing information such as:
-
-- Tenant
-- Customer
-- Point Account
-- Transaction Type
-- Amount
-- Balance Before
-- Balance After
-- Reference
-- Description
-- Operator
-- Created Time
-
-This provides an auditable history of point changes.
+API 的 JWT 驗證與 Filament 後台的 Web Session 是兩個獨立的驗證環境。
 
 ---
 
-## 💳 Point Transactions
+## 🎯 會員點數系統
 
-Supported transaction types include:
+本系統以**點數帳本（Point Ledger）**作為點數管理的核心。
+
+會員目前的點數餘額儲存在 `point_accounts`，每一次點數異動則記錄於 `point_transactions`。
+
+```text
+會員
+ │
+ ▼
+點數帳戶
+ │
+ ├── 取得點數
+ ├── 兌換點數
+ ├── 手動調整
+ ├── 退款
+ ├── 額外獎勵
+ └── 點數到期
+         │
+         ▼
+     點數交易
+```
+
+系統不只依賴目前餘額。
+
+每一筆點數交易會記錄例如：
+
+- 租戶
+- 會員
+- 點數帳戶
+- 交易類型
+- 點數金額
+- 交易前餘額
+- 交易後餘額
+- 關聯資料
+- 說明
+- 操作者
+- 建立時間
+
+因此可以完整追蹤會員的點數異動歷程。
+
+---
+
+## 💳 點數交易
+
+目前支援的點數交易類型：
 
 ```text
 earn
@@ -213,119 +252,128 @@ bonus
 expire
 ```
 
-Point mutations are executed inside database transactions.
+點數異動會使用資料庫交易（Database Transaction）處理。
 
-For example:
+典型的點數操作流程：
 
 ```text
-Point Earn
-
-1. Lock Point Account
-2. Read current balance
-3. Calculate new balance
-4. Update balance
-5. Create Point Transaction
-6. Commit
+1. 鎖定點數帳戶
+2. 取得目前餘額
+3. 計算新的餘額
+4. 更新餘額
+5. 建立點數交易紀錄
+6. 提交 Transaction
 ```
 
-This helps prevent inconsistent balances during concurrent requests.
+透過資料庫交易與 Row-Level Locking，降低並發操作造成點數餘額不一致的風險。
 
 ---
 
-## 🎁 Rewards
+## 🎁 獎勵
 
-Rewards can be configured for each tenant.
+每個租戶可以設定自己的獎勵。
 
-A reward can contain:
+獎勵可以包含：
 
-- Name
-- Description
-- Required Points
-- Stock
-- Status
-- Start Time
-- End Time
+- 名稱
+- 說明
+- 所需點數
+- 庫存
+- 狀態
+- 開始時間
+- 結束時間
 
-Reward redemption verifies:
+進行獎勵兌換時，系統會依序確認：
 
-1. Reward availability
-2. Reward stock
-3. Customer point balance
-4. Point deduction
-5. Transaction creation
-6. Stock deduction
-7. Redemption creation
+```text
+1. 獎勵是否可用
+2. 獎勵庫存
+3. 會員點數餘額
+4. 扣除點數
+5. 建立點數交易
+6. 扣除獎勵庫存
+7. 建立兌換紀錄
+```
 
-These operations are executed atomically.
+相關操作應以原子方式完成，避免只完成部分操作。
 
 ---
 
-## 🖥 Admin Panel
+## 🖥 後台管理介面
 
-The administration panel is built with:
+後台使用：
 
-- Filament v4
-- Livewire
+- Filament 5
+- Livewire 4
 
-The admin panel provides management interfaces for:
+提供管理系統資料的管理介面，例如：
 
 ```text
-Dashboard
-├── Tenants
-├── Users
-├── Customers
-├── Point Accounts
-├── Point Transactions
-├── Point Rules
-├── Rewards
-└── Redemptions
+儀表板
+├── 租戶
+├── 使用者
+├── 會員
+├── 點數帳戶
+├── 點數交易
+├── 點數規則
+├── 獎勵
+└── 兌換紀錄
 ```
 
-Filament is responsible for administration and UI interaction.
+Filament 負責後台管理與 UI 操作。
 
-Business logic remains inside application services so that both API and Filament use the same rules.
+商業邏輯則集中於 Application Service，使 API 與 Filament 可以共用相同的商業規則。
 
 ---
 
 ## 📡 API
 
-API endpoints are versioned under:
+所有版本化 API 都使用：
 
 ```text
 /api/v1
 ```
 
-Main API groups:
+主要 API：
 
 ```text
 /api/v1/auth
+
 /api/v1/customers
+
 /api/v1/customers/{customer}/points
+
 /api/v1/customers/{customer}/point-transactions
+
 /api/v1/point-rules
+
 /api/v1/rewards
+
 /api/v1/rewards/{reward}/redeem
+
 /api/v1/redemptions
 ```
 
-The API uses a consistent response structure.
+### API 回應格式
 
-### Success
+API 採用統一的回應結構。
+
+#### 成功
 
 ```json
 {
     "success": true,
-    "message": "Operation successful",
+    "message": "操作成功",
     "data": {}
 }
 ```
 
-### Error
+#### 失敗
 
 ```json
 {
     "success": false,
-    "message": "Insufficient points",
+    "message": "點數不足",
     "error_code": "INSUFFICIENT_POINTS",
     "errors": []
 }
@@ -333,23 +381,47 @@ The API uses a consistent response structure.
 
 ---
 
-## 📚 API Documentation
+## 📚 API 文件
 
-Interactive API documentation is provided through L5-Swagger.
+本專案使用 **L5-Swagger** 提供互動式 API 文件。
 
-After starting the application, visit:
+啟動應用程式後，可前往：
 
 ```text
 /api/documentation
 ```
 
-Swagger documentation covers the available API endpoints, request parameters, authentication, responses, and error codes.
+本機開發環境例如：
+
+```text
+http://127.0.0.1:8000/api/documentation
+```
+
+Swagger 文件包含：
+
+- API Endpoint
+- Request Parameters
+- Request Body
+- JWT 身分驗證
+- Response
+- Error Response
+- Error Code
+
+API Endpoint 使用 `/api/v1` 作為版本前綴。
+
+例如：
+
+```text
+/api/v1/auth/login
+```
+
+Swagger 文件中的 API Base Path 與 Endpoint Path 必須避免重複加入 `/api/v1`。
 
 ---
 
-## 📁 Project Structure
+## 📁 專案結構
 
-The application follows a domain-oriented structure while keeping Laravel conventions familiar.
+專案採用 Domain-oriented 的結構，同時保留 Laravel 熟悉的目錄規範。
 
 ```text
 app/
@@ -396,19 +468,13 @@ tests/
 │   ├── Point/
 │   └── Reward/
 └── Unit/
-
-docs/
-├── architecture.md
-├── multi-tenancy.md
-├── point-system.md
-└── api.md
 ```
 
 ---
 
-## 🧩 Core Models
+## 🧩 核心 Model
 
-The main domain models are:
+主要 Domain Model：
 
 ```text
 Tenant
@@ -422,36 +488,36 @@ RewardRedemption
 AuditLog
 ```
 
-### Relationships
+### 主要關聯
 
 ```text
 Tenant
- ├── hasMany Users
- ├── hasMany Customers
- ├── hasMany Point Rules
- ├── hasMany Rewards
- └── hasMany Redemptions
+├── hasMany Users
+├── hasMany Customers
+├── hasMany Point Rules
+├── hasMany Rewards
+└── hasMany Redemptions
 
 Customer
- ├── belongsTo Tenant
- ├── hasOne PointAccount
- └── hasMany PointTransactions
+├── belongsTo Tenant
+├── hasOne PointAccount
+└── hasMany PointTransactions
 
 PointAccount
- ├── belongsTo Customer
- └── hasMany PointTransactions
+├── belongsTo Customer
+└── hasMany PointTransactions
 
 Reward
- └── hasMany Redemptions
+└── hasMany Redemptions
 ```
 
 ---
 
-## 🧠 Application Principles
+## 🧠 開發原則
 
-### Thin Controllers
+### 輕量 Controller
 
-Controllers are responsible for handling HTTP requests and delegating work to services.
+Controller 主要負責處理 HTTP Request，實際商業邏輯交由 Service 處理。
 
 ```text
 Request
@@ -463,11 +529,11 @@ Service
 Model
 ```
 
-Business logic should not be placed directly inside controllers.
+商業邏輯不應直接堆積在 Controller 中。
 
-### Shared Business Logic
+### 共用商業邏輯
 
-API Controllers and Filament Actions should use the same services.
+API Controller 與 Filament 操作應共用相同的 Application Service。
 
 ```text
 API
@@ -479,87 +545,88 @@ Filament
  └── PointService
 ```
 
-This prevents different application entry points from implementing different business rules.
+避免不同入口各自實作不同的商業規則。
 
-### Explicit Code
+### 明確程式碼
 
-The project favors:
+本專案偏好：
 
-- Clear naming
-- Small responsibilities
-- Familiar Laravel conventions
-- Explicit business rules
-- Minimal abstraction
-- Easy-to-follow dependencies
+- 清楚的命名
+- 單一且明確的責任
+- 熟悉的 Laravel Convention
+- 明確的商業規則
+- 最少必要的抽象
+- 容易追蹤的依賴關係
 
-The goal is to make the codebase understandable to both developers and AI coding assistants.
+程式碼結構也以方便**開發者與 AI Coding Assistant 快速理解**為目標。
 
 ---
 
-## 🧪 Testing
+## 🧪 測試
 
-The project uses Laravel's testing tools for automated verification.
+專案使用 Laravel 測試工具進行自動化測試。
 
-Important test scenarios include:
+重要測試情境包括：
 
-- JWT authentication
-- Tenant isolation
-- Customer access control
-- Point earning
-- Point redemption
-- Insufficient points
-- Point transaction creation
-- Point balance consistency
-- Reward stock validation
-- Cross-tenant access prevention
+- JWT 身分驗證
+- 租戶隔離
+- 會員存取權限
+- 點數取得
+- 點數兌換
+- 點數不足
+- 點數交易建立
+- 點數餘額一致性
+- 獎勵庫存驗證
+- 跨租戶存取防護
 
-A critical security scenario is:
+重要的安全情境：
 
 ```text
 Tenant A
-   │
-   └── Customer A
+ │
+ └── Customer A
 
 Tenant B
-   │
-   └── Customer B
+ │
+ └── Customer B
 
 Tenant A User
-   │
-   └── ❌ Cannot access Customer B
+ │
+ └── ❌ 不可存取 Customer B
 ```
 
 ---
 
-## 🚀 Installation
+## 🚀 安裝
 
-Clone the repository:
+### 1. Clone 專案
 
 ```bash
 git clone <repository-url>
-
 cd <project-directory>
 ```
 
-Install PHP dependencies:
+### 2. 安裝 PHP 套件
 
 ```bash
 composer install
 ```
 
-Create the environment file:
+### 3. 建立環境設定檔
 
 ```bash
 cp .env.example .env
 ```
 
-Generate the application key:
+### 4. 產生 Application Key
 
 ```bash
 php artisan key:generate
 ```
 
-Configure the database in `.env`:
+### 5. 設定資料庫
+
+修改 `.env`：
 
 ```env
 DB_CONNECTION=mysql
@@ -570,37 +637,37 @@ DB_USERNAME=root
 DB_PASSWORD=
 ```
 
-Run migrations:
+### 6. 執行 Migration
 
 ```bash
 php artisan migrate
 ```
 
-Generate JWT secret:
+### 7. 產生 JWT Secret
 
 ```bash
 php artisan jwt:secret
 ```
 
-Generate Swagger documentation:
+### 8. 產生 Swagger 文件
 
 ```bash
 php artisan l5-swagger:generate
 ```
 
-Start the development server:
+### 9. 啟動開發伺服器
 
 ```bash
 php artisan serve
 ```
 
-The application will be available at:
+預設可透過以下網址存取：
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Swagger:
+Swagger API 文件：
 
 ```text
 http://127.0.0.1:8000/api/documentation
@@ -608,134 +675,80 @@ http://127.0.0.1:8000/api/documentation
 
 ---
 
-## 🔄 Development Workflow
+## 🔄 開發流程
 
-Recommended development order:
+目前專案主要依照以下功能方向進行開發：
 
 ```text
-1. Project Foundation
-       ↓
-2. JWT Authentication
-       ↓
-3. Tenant Context
-       ↓
-4. Tenant Isolation
-       ↓
-5. Customer Management
-       ↓
-6. Point Account
-       ↓
-7. Point Ledger
-       ↓
-8. Point Earn / Redeem
-       ↓
-9. Point Rules
-       ↓
-10. Rewards
-       ↓
-11. Redemptions
-       ↓
-12. Audit Logging
-       ↓
-13. Swagger Documentation
-       ↓
-14. Automated Tests
+專案基礎
+    ↓
+身分驗證
+    ↓
+Tenant Context
+    ↓
+租戶隔離
+    ↓
+會員管理
+    ↓
+點數帳戶
+    ↓
+點數帳本
+    ↓
+點數取得 / 兌換
+    ↓
+點數規則
+    ↓
+獎勵
+    ↓
+兌換
+    ↓
+活動紀錄
+    ↓
+API 文件
+    ↓
+自動化測試
 ```
 
 ---
 
-## 🗺 Roadmap
+## 🔒 安全原則
 
-### Phase 1 — Foundation
+本專案將**租戶隔離視為安全邊界**。
 
-- [x] Laravel 12
-- [x] Filament v4
-- [x] Livewire
-- [x] JWT Authentication
-- [x] L5-Swagger
-- [ ] Tenant
-- [ ] User
-- [ ] Tenant Context
-- [ ] Tenant Isolation
+重要規則：
 
-### Phase 2 — Customer
-
-- [ ] Customer CRUD
-- [ ] Customer authentication/access rules
-- [ ] Customer point account
-
-### Phase 3 — Points
-
-- [ ] Point Account
-- [ ] Point Transaction
-- [ ] Earn Points
-- [ ] Redeem Points
-- [ ] Adjustment
-- [ ] Refund
-- [ ] Expiration
-- [ ] Transaction history
-
-### Phase 4 — Loyalty
-
-- [ ] Point Rules
-- [ ] Rewards
-- [ ] Reward Stock
-- [ ] Reward Redemption
-
-### Phase 5 — Reliability
-
-- [ ] Database transaction protection
-- [ ] Row-level locking
-- [ ] Idempotency
-- [ ] Audit logging
-- [ ] Additional security tests
-
-### Phase 6 — Documentation
-
-- [ ] Complete Swagger documentation
-- [ ] Architecture documentation
-- [ ] ERD
-- [ ] API examples
-- [ ] Deployment documentation
+1. 不信任 Client 提供的 `tenant_id`。
+2. 從已驗證的應用程式 Context 取得目前租戶。
+3. 驗證資源是否屬於目前租戶。
+4. 使用 Authorization Policy 進行權限控制。
+5. 防止跨租戶查詢。
+6. 點數異動使用 Database Transaction。
+7. 並發點數操作使用 Row-Level Locking。
+8. 保留完整的點數交易紀錄。
+9. API JWT Authentication 與 Filament Web Session Authentication 分離。
 
 ---
 
-## 🔒 Security Principles
+## 📌 專案目標
 
-The project treats tenant isolation as a security boundary.
+本專案主要展示如何使用 Laravel 建立一套可維護、可擴充的後端系統，包括：
 
-Important rules:
+- 多租戶架構
+- JWT 身分驗證
+- RESTful API
+- API 版本控制
+- Domain-oriented Service
+- Filament 5 後台管理
+- Livewire 4 UI
+- 點數帳本架構
+- 具交易安全性的點數操作
+- Swagger API 文件
+- 自動化測試
 
-1. Never trust `tenant_id` supplied by the client.
-2. Always resolve the current tenant from authenticated context.
-3. Validate resource ownership.
-4. Apply authorization policies.
-5. Prevent cross-tenant queries.
-6. Use database transactions for point mutations.
-7. Use row locking for concurrent balance operations.
-8. Keep point transactions auditable.
-
----
-
-## 📌 Project Goals
-
-This project is designed to demonstrate how to build a maintainable Laravel application with:
-
-- Multi-Tenant Architecture
-- JWT Authentication
-- RESTful API Design
-- Domain-oriented Services
-- Filament Administration
-- Livewire UI
-- Point Ledger Architecture
-- Transaction-safe Point Operations
-- API Documentation
-- Automated Testing
-
-The primary goal is not to build every possible loyalty feature, but to provide a clean and extensible foundation that can be expanded as business requirements grow.
+本專案的目標不是一次實作所有可能的會員忠誠度功能，而是建立一個**乾淨、明確且容易擴充的後端基礎架構**，讓後續可以依照實際商業需求持續增加功能。
 
 ---
 
 ## 📄 License
 
-This project is open-sourced under the [MIT License](LICENSE).
+本專案採用 [MIT License](LICENSE) 授權。

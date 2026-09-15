@@ -17,7 +17,7 @@ use Illuminate\Http\Request;
 class AuthController extends Controller
 {
     #[OA\Post(
-        path: "/api/v1/auth/login",
+        path: "/auth/login",
         summary: "User login",
         requestBody: new OA\RequestBody(
             required: true,
@@ -105,7 +105,7 @@ class AuthController extends Controller
     }
 
     #[OA\Post(
-        path: "/api/v1/auth/logout",
+        path: "/auth/logout",
         summary: "User logout",
         security: [["bearerAuth" => []]],
         responses: [
@@ -133,8 +133,8 @@ class AuthController extends Controller
     }
 
     #[OA\Post(
-        path: "/api/v1/auth/refresh",
-        summary: "Refresh token",
+        path: "/auth/refresh",
+        summary: "Refresh JWT token",
         security: [["bearerAuth" => []]],
         responses: [
             new OA\Response(
@@ -191,7 +191,7 @@ class AuthController extends Controller
     }
 
     #[OA\Get(
-        path: "/api/v1/auth/me",
+        path: "/auth/me",
         summary: "Get current user",
         security: [["bearerAuth" => []]],
         responses: [

@@ -11,8 +11,20 @@ trait BelongsToTenant
     public static function bootBelongsToTenant(): void
     {
         static::creating(function (Model $model) {
+            $user = auth()->user();
             $tenantResolver = app(TenantResolver::class);
 
+            // 如果沒有使用者，直接返回，避免呼叫null的方法
+            if (!$user) {
+                return;
+            }
+
+            // Super Admin 建立資料時不自動填入tenant_id，讓手動指定
+            if ($user->hasRole('super_admin')) {
+                return;
+            }
+
+            // 一般使用者自動填入目前的租戶ID
             if (!$model->tenant_id && $tenantId = $tenantResolver->getCurrentTenantId()) {
                 $model->tenant_id = $tenantId;
             }
@@ -22,8 +34,18 @@ trait BelongsToTenant
             $user = auth()->user();
             $tenantResolver = app(TenantResolver::class);
 
-            // Only apply tenant scope if user is not super_admin
-            if ($user && !$user->hasRole('super_admin') && $tenantId = $tenantResolver->getCurrentTenantId()) {
+            // 如果沒有使用者，直接返回，避免呼叫null的方法
+            if (!$user) {
+                return;
+            }
+
+            // Super Admin 完全跳過所有租戶限制 - 優先判斷，確保不會誤套用
+            if ($user->hasRole('super_admin')) {
+                return;
+            }
+
+            // 只有非超級管理員才套用租戶範圍
+            if ($tenantId = $tenantResolver->getCurrentTenantId()) {
                 $builder->where($builder->getModel()->getTable() . '.tenant_id', $tenantId);
             }
         });

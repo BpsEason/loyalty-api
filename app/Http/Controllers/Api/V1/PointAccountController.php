@@ -15,7 +15,7 @@ use OpenApi\Attributes as OA;
 class PointAccountController extends Controller
 {
     #[OA\Get(
-        path: "/api/v1/customers/{customer}/points",
+        path: "/customers/{customer}/points",
         summary: "Get point account for a specific customer",
         security: [["bearerAuth" => []]],
         parameters: [

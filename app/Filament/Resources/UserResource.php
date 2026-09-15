@@ -40,7 +40,7 @@ class UserResource extends Resource
                     ->unique(ignoreRecord: true),
                 Forms\Components\TextInput::make('password')
                     ->password()
-                    ->dehydrate(fn($state) => filled($state) ? Hash::make($state) : null)
+                    ->dehydrated(fn($state) => filled($state) ? Hash::make($state) : null)
                     ->required(fn($context) => $context === 'create')
                     ->dehydratedWhenHidden()
                     ->hidden(fn($context) => $context === 'edit'),

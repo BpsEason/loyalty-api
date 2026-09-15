@@ -27,12 +27,27 @@ return Application::configure(basePath: dirname(__DIR__))
             ], 422);
         });
 
-        // 統一處理認證錯誤
+        // 統一處理認證錯誤 - 只對API請求返回JSON
         $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthenticated',
-                'data' => null,
-            ], 401);
+            if (request()->is('api/*')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated',
+                    'data' => null,
+                ], 401);
+            }
+        });
+
+        // 只在本機環境下對API請求返回詳細例外資訊
+        $exceptions->render(function (\Throwable $e) {
+            if (app()->environment('local') && request()->is('api/*')) {
+                return response()->json([
+                    'exception' => get_class($e),
+                    'message' => $e->getMessage(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                    'trace' => $e->getTraceAsString(),
+                ], 500);
+            }
         });
     })->create();

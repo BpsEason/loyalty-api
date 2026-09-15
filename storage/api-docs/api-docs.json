@@ -12,10 +12,10 @@
         }
     ],
     "paths": {
-        "/api/v1/auth/login": {
+        "/auth/login": {
             "post": {
                 "summary": "User login",
-                "operationId": "a7997e7c1e3bfed64d4e56de82415931",
+                "operationId": "985cd5203e2d0a820e113f2f4fdb2847",
                 "requestBody": {
                     "required": true,
                     "content": {
@@ -134,10 +134,10 @@
                 }
             }
         },
-        "/api/v1/auth/logout": {
+        "/auth/logout": {
             "post": {
                 "summary": "User logout",
-                "operationId": "f6b8957b4c0b25636613a9f0512a8ba9",
+                "operationId": "a05022a34eef599e04fb0a5254375b84",
                 "responses": {
                     "200": {
                         "description": "Logout successful",
@@ -171,10 +171,10 @@
                 ]
             }
         },
-        "/api/v1/auth/refresh": {
+        "/auth/refresh": {
             "post": {
-                "summary": "Refresh token",
-                "operationId": "c42c3cd7fd7fe0dbd5bcc42962059e90",
+                "summary": "Refresh JWT token",
+                "operationId": "03c7bb98658eb98880114621321bd8d8",
                 "responses": {
                     "200": {
                         "description": "Token refreshed successfully",
@@ -244,10 +244,10 @@
                 ]
             }
         },
-        "/api/v1/auth/me": {
+        "/auth/me": {
             "get": {
                 "summary": "Get current user",
-                "operationId": "37d33f0281f67d31d05b4c45eea0143b",
+                "operationId": "e339e0e74860c0647fd1d41bbbbc13b2",
                 "responses": {
                     "200": {
                         "description": "User data retrieved successfully",
@@ -284,10 +284,10 @@
                 ]
             }
         },
-        "/api/v1/customers": {
+        "/customers": {
             "get": {
                 "summary": "Get list of customers",
-                "operationId": "4446e25a8cf802d05268d8b26e3df4af",
+                "operationId": "2a2e8777a73f84307e0af1db6bbd9b03",
                 "responses": {
                     "200": {
                         "description": "Customers retrieved successfully",
@@ -324,7 +324,7 @@
             },
             "post": {
                 "summary": "Create a new customer",
-                "operationId": "4000324e6e48b657b38514893267ba99",
+                "operationId": "047828a976c6178185a7716d2bad1117",
                 "requestBody": {
                     "required": true,
                     "content": {
@@ -411,10 +411,10 @@
                 ]
             }
         },
-        "/api/v1/customers/{customer}": {
+        "/customers/{customer}": {
             "get": {
                 "summary": "Get a specific customer",
-                "operationId": "239ca810caae47dc2e02fd10bfb19130",
+                "operationId": "978b36d9e308513d0a4441539631f572",
                 "parameters": [
                     {
                         "name": "customer",
@@ -478,7 +478,7 @@
             },
             "put": {
                 "summary": "Update a customer",
-                "operationId": "65e716536c99a8ccc69bd8c030e844f2",
+                "operationId": "aee7478bb18d6fef353a28a9eeed3afe",
                 "parameters": [
                     {
                         "name": "customer",
@@ -555,7 +555,7 @@
             },
             "delete": {
                 "summary": "Delete a customer",
-                "operationId": "052123822971c729fc98e6af6beb3c04",
+                "operationId": "f64816221eba805da8e7a652b0e7857b",
                 "parameters": [
                     {
                         "name": "customer",
@@ -602,10 +602,10 @@
                 ]
             }
         },
-        "/api/v1/customers/{customer}/points": {
+        "/customers/{customer}/points": {
             "get": {
                 "summary": "Get point account for a specific customer",
-                "operationId": "61810bed6fb5a8894a89cc0911a5c3b5",
+                "operationId": "493b586aa1b21f23f86d53fd6d9e556b",
                 "parameters": [
                     {
                         "name": "customer",
@@ -668,10 +668,10 @@
                 ]
             }
         },
-        "/api/v1/customers/{customer}/point-transactions": {
+        "/customers/{customer}/point-transactions": {
             "get": {
                 "summary": "Get list of point transactions for a customer",
-                "operationId": "90edca10de937e8c3fe4418e1d4e5a89",
+                "operationId": "da3a9ad2e43de0933b21576dda2146ff",
                 "parameters": [
                     {
                         "name": "customer",
@@ -718,7 +718,7 @@
             },
             "post": {
                 "summary": "Create a new point transaction",
-                "operationId": "30bcadfd2a6de7d02c4704dad93d5926",
+                "operationId": "b4b9bf9f7c96cced916bfea238619cd0",
                 "parameters": [
                     {
                         "name": "customer",
@@ -841,10 +841,10 @@
                 ]
             }
         },
-        "/api/v1/customers/{customer}/point-transactions/{pointTransaction}": {
+        "/customers/{customer}/point-transactions/{pointTransaction}": {
             "get": {
                 "summary": "Get a specific point transaction",
-                "operationId": "1e146088812766c7021a421ad975aebb",
+                "operationId": "b6b101d0bbba665c3108dec5d2dea25d",
                 "parameters": [
                     {
                         "name": "customer",
