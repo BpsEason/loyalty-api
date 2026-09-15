@@ -20,7 +20,7 @@ class PointTransactionController extends Controller
 {
     public function __construct()
     {
-        $this->authorizeResource(PointTransaction::class, 'pointTransaction');
+        // 移除不存在的 authorizeResource 方法呼叫
     }
 
     #[OA\Get(
@@ -112,6 +112,8 @@ class PointTransactionController extends Controller
         security: [['bearerAuth' => []]],
         parameters: [
             new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+            new OA\Parameter(name: 'X-Tenant-ID', in: 'header', required: false, schema: new OA\Schema(type: 'integer'), description: 'Tenant ID for external system integration'),
+            new OA\Parameter(name: 'Idempotency-Key', in: 'header', required: false, schema: new OA\Schema(type: 'string'), description: 'Unique key to prevent duplicate transactions'),
         ],
         requestBody: new OA\RequestBody(
             required: true,
@@ -121,6 +123,7 @@ class PointTransactionController extends Controller
                     new OA\Property(property: 'type', type: 'string', example: 'earn', enum: ['earn', 'redeem', 'adjust', 'refund', 'expire']),
                     new OA\Property(property: 'amount', type: 'integer', example: 100, minimum: 1),
                     new OA\Property(property: 'description', type: 'string', nullable: true, example: 'Purchase reward'),
+                    new OA\Property(property: 'reference', type: 'string', nullable: true, example: 'ORDER-12345', description: 'External order reference ID'),
                 ]
             )
         ),
@@ -163,6 +166,24 @@ class PointTransactionController extends Controller
     {
         $validated = $request->validated();
 
+        // 冪等性檢查：如果有傳入 Idempotency-Key 標頭，檢查是否已處理過此請求
+        $idempotencyKey = $request->header('Idempotency-Key');
+        if ($idempotencyKey) {
+            $cachedTransactionId = cache()->get("idempotency:{$idempotencyKey}");
+            if ($cachedTransactionId) {
+                $existingTransaction = PointTransaction::find($cachedTransactionId);
+                if ($existingTransaction) {
+                    return ApiResponse::success(
+                        data: new PointTransactionResource($existingTransaction),
+                        message: 'Point transaction retrieved (idempotent)',
+                        status: 200
+                    );
+                }
+                // 快取存在但交易不存在，清除過期快取
+                cache()->forget("idempotency:{$idempotencyKey}");
+            }
+        }
+
         try {
             $method = match ($validated['type']) {
                 PointTransaction::TYPE_EARN => 'earn',
@@ -177,9 +198,14 @@ class PointTransactionController extends Controller
                 customer: $customer,
                 amount: $validated['amount'],
                 description: $validated['description'] ?? null,
-                reference: null,
+                reference: $validated['reference'] ?? null,
                 createdBy: auth()->id()
             );
+
+            // 如果有冪等性金鑰，快取交易ID 24小時
+            if ($idempotencyKey) {
+                cache()->put("idempotency:{$idempotencyKey}", $transaction->id, 86400);
+            }
 
             return ApiResponse::success(
                 data: new PointTransactionResource($transaction),

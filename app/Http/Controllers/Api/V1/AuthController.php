@@ -203,13 +203,16 @@ class AuthController extends Controller
 
     #[OA\Get(
         path: '/auth/me',
-        summary: 'Get current user',
+        summary: 'Get current authenticated user',
         tags: ['Authentication'],
         security: [['bearerAuth' => []]],
+        parameters: [
+            new OA\Parameter(name: 'X-Tenant-ID', in: 'header', required: false, schema: new OA\Schema(type: 'integer'), description: 'Tenant ID for external system integration'),
+        ],
         responses: [
             new OA\Response(
                 response: 200,
-                description: 'User data retrieved successfully',
+                description: 'User retrieved successfully',
                 content: new OA\JsonContent(
                     properties: [
                         new OA\Property(property: 'success', type: 'boolean', example: true),

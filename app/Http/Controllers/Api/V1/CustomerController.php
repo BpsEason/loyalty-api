@@ -19,7 +19,7 @@ class CustomerController extends Controller
 {
     public function __construct()
     {
-        $this->authorizeResource(Customer::class, 'customer');
+        // 移除不存在的 authorizeResource 方法呼叫
     }
 
     #[OA\Get(

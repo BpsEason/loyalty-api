@@ -258,11 +258,22 @@
                 "tags": [
                     "Authentication"
                 ],
-                "summary": "Get current user",
+                "summary": "Get current authenticated user",
                 "operationId": "e339e0e74860c0647fd1d41bbbbc13b2",
+                "parameters": [
+                    {
+                        "name": "X-Tenant-ID",
+                        "in": "header",
+                        "description": "Tenant ID for external system integration",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "User data retrieved successfully",
+                        "description": "User retrieved successfully",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -763,6 +774,24 @@
                         "schema": {
                             "type": "integer"
                         }
+                    },
+                    {
+                        "name": "X-Tenant-ID",
+                        "in": "header",
+                        "description": "Tenant ID for external system integration",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "description": "Unique key to prevent duplicate transactions",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "requestBody": {
@@ -794,6 +823,12 @@
                                     "description": {
                                         "type": "string",
                                         "example": "Purchase reward",
+                                        "nullable": true
+                                    },
+                                    "reference": {
+                                        "description": "External order reference ID",
+                                        "type": "string",
+                                        "example": "ORDER-12345",
                                         "nullable": true
                                     }
                                 },
