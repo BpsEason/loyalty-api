@@ -19,9 +19,11 @@ trait BelongsToTenant
         });
 
         static::addGlobalScope('tenant', function (Builder $builder) {
+            $user = auth()->user();
             $tenantResolver = app(TenantResolver::class);
 
-            if ($tenantId = $tenantResolver->getCurrentTenantId()) {
+            // Only apply tenant scope if user is not super_admin
+            if ($user && !$user->hasRole('super_admin') && $tenantId = $tenantResolver->getCurrentTenantId()) {
                 $builder->where($builder->getModel()->getTable() . '.tenant_id', $tenantId);
             }
         });

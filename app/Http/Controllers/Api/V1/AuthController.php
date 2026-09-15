@@ -3,147 +3,219 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
+use App\Http\Requests\Api\V1\Auth\LoginRequest;
+use App\Http\Resources\Api\V1\UserResource;
+use App\Support\Api\ApiResponse;
 use Tymon\JWTAuth\Facades\JWTAuth;
 use Tymon\JWTAuth\Exceptions\JWTException;
-use OpenApi\Annotations as OA;
+use OpenApi\Attributes as OA;
+use Illuminate\Http\Request;
 
 /**
- * @OA\Info(
- *     title="Multi-Tenant Loyalty API",
- *     version="1.0.0",
- *     description="Multi-tenant loyalty point management API"
- * )
- * @OA\SecurityScheme(
- *     securityScheme="bearerAuth",
- *     type="http",
- *     scheme="bearer",
- *     bearerFormat="JWT"
- * )
+ * JWT Authentication Controller
  */
 class AuthController extends Controller
 {
-    /**
-     * @OA\Post(
-     *     path="/api/v1/auth/login",
-     *     summary="User login",
-     *     @OA\RequestBody(
-     *         @OA\JsonContent(
-     *             required={"email","password"},
-     *             @OA\Property(property="email", type="string", format="email"),
-     *             @OA\Property(property="password", type="string")
-     *         )
-     *     ),
-     *     @OA\Response(
-     *         response=200,
-     *         description="Login successful"
-     *     ),
-     *     @OA\Response(
-     *         response=401,
-     *         description="Invalid credentials"
-     *     )
-     * )
-     */
-    public function login(Request $request)
+    #[OA\Post(
+        path: "/api/v1/auth/login",
+        summary: "User login",
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\JsonContent(
+                required: ["email", "password"],
+                properties: [
+                    new OA\Property(property: "email", type: "string", format: "email"),
+                    new OA\Property(property: "password", type: "string")
+                ]
+            )
+        ),
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: "Login successful",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: "success", type: "boolean", example: true),
+                        new OA\Property(property: "message", type: "string", example: "Login successful"),
+                        new OA\Property(
+                            property: "data",
+                            type: "object",
+                            properties: [
+                                new OA\Property(property: "access_token", type: "string"),
+                                new OA\Property(property: "token_type", type: "string", example: "Bearer"),
+                                new OA\Property(property: "expires_in", type: "integer", example: 3600),
+                                new OA\Property(property: "user", type: "object")
+                            ]
+                        )
+                    ]
+                )
+            ),
+            new OA\Response(
+                response: 401,
+                description: "Invalid credentials",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: "success", type: "boolean", example: false),
+                        new OA\Property(property: "message", type: "string", example: "Invalid credentials"),
+                        new OA\Property(property: "data", type: "null", nullable: true),
+                        new OA\Property(property: "errors", type: "object", example: [])
+                    ]
+                )
+            ),
+            new OA\Response(
+                response: 500,
+                description: "Could not create token",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: "success", type: "boolean", example: false),
+                        new OA\Property(property: "message", type: "string", example: "Could not create token"),
+                        new OA\Property(property: "data", type: "null", nullable: true)
+                    ]
+                )
+            )
+        ]
+    )]
+    public function login(LoginRequest $request)
     {
-        $request->validate([
-            'email' => 'required|email',
-            'password' => 'required|string',
-        ]);
-
         try {
             if (!$token = JWTAuth::attempt($request->only('email', 'password'))) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invalid credentials'
-                ], 401);
+                return ApiResponse::error(
+                    message: 'Invalid credentials',
+                    status: 401
+                );
             }
         } catch (JWTException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Could not create token'
-            ], 500);
+            return ApiResponse::error(
+                message: 'Could not create token',
+                status: 500
+            );
         }
 
-        return response()->json([
-            'success' => true,
-            'data' => [
+        $user = auth()->user();
+
+        return ApiResponse::success(
+            data: [
                 'access_token' => $token,
                 'token_type' => 'Bearer',
-                'expires_in' => JWTAuth::factory()->getTTL() * 60
-            ]
-        ]);
+                'expires_in' => JWTAuth::factory()->getTTL() * 60,
+                'user' => new UserResource($user)
+            ],
+            message: 'Login successful'
+        );
     }
 
-    /**
-     * @OA\Post(
-     *     path="/api/v1/auth/logout",
-     *     summary="User logout",
-     *     security={{"bearerAuth":{}}},
-     *     @OA\Response(
-     *         response=200,
-     *         description="Logout successful"
-     *     )
-     * )
-     */
+    #[OA\Post(
+        path: "/api/v1/auth/logout",
+        summary: "User logout",
+        security: [["bearerAuth" => []]],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: "Logout successful",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: "success", type: "boolean", example: true),
+                        new OA\Property(property: "message", type: "string", example: "Successfully logged out"),
+                        new OA\Property(property: "data", type: "null", nullable: true)
+                    ]
+                )
+            )
+        ]
+    )]
     public function logout(Request $request)
     {
         JWTAuth::invalidate(JWTAuth::getToken());
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Successfully logged out'
-        ]);
+        return ApiResponse::success(
+            data: null,
+            message: 'Successfully logged out'
+        );
     }
 
-    /**
-     * @OA\Post(
-     *     path="/api/v1/auth/refresh",
-     *     summary="Refresh token",
-     *     security={{"bearerAuth":{}}},
-     *     @OA\Response(
-     *         response=200,
-     *         description="Token refreshed"
-     *     )
-     * )
-     */
+    #[OA\Post(
+        path: "/api/v1/auth/refresh",
+        summary: "Refresh token",
+        security: [["bearerAuth" => []]],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: "Token refreshed successfully",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: "success", type: "boolean", example: true),
+                        new OA\Property(property: "message", type: "string", example: "Token refreshed successfully"),
+                        new OA\Property(
+                            property: "data",
+                            type: "object",
+                            properties: [
+                                new OA\Property(property: "access_token", type: "string"),
+                                new OA\Property(property: "token_type", type: "string", example: "Bearer"),
+                                new OA\Property(property: "expires_in", type: "integer", example: 3600)
+                            ]
+                        )
+                    ]
+                )
+            ),
+            new OA\Response(
+                response: 500,
+                description: "Could not refresh token",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: "success", type: "boolean", example: false),
+                        new OA\Property(property: "message", type: "string", example: "Could not refresh token"),
+                        new OA\Property(property: "data", type: "null", nullable: true)
+                    ]
+                )
+            )
+        ]
+    )]
     public function refresh()
     {
         try {
             $token = JWTAuth::refresh(JWTAuth::getToken());
         } catch (JWTException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Could not refresh token'
-            ], 500);
+            return ApiResponse::error(
+                message: 'Could not refresh token',
+                status: 500
+            );
         }
 
-        return response()->json([
-            'success' => true,
-            'data' => [
+        return ApiResponse::success(
+            data: [
                 'access_token' => $token,
                 'token_type' => 'Bearer',
                 'expires_in' => JWTAuth::factory()->getTTL() * 60
-            ]
-        ]);
+            ],
+            message: 'Token refreshed successfully'
+        );
     }
 
-    /**
-     * @OA\Get(
-     *     path="/api/v1/auth/me",
-     *     summary="Get current user",
-     *     security={{"bearerAuth":{}}},
-     *     @OA\Response(
-     *         response=200,
-     *         description="User data"
-     *     )
-     * )
-     */
+    #[OA\Get(
+        path: "/api/v1/auth/me",
+        summary: "Get current user",
+        security: [["bearerAuth" => []]],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: "User data retrieved successfully",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: "success", type: "boolean", example: true),
+                        new OA\Property(property: "message", type: "string", example: "User retrieved successfully"),
+                        new OA\Property(property: "data", type: "object"),
+                        new OA\Property(property: "errors", type: "object", example: [])
+                    ]
+                )
+            )
+        ]
+    )]
     public function me()
     {
-        return response()->json([
-            'success' => true,
-            'data' => auth()->user()
-        ]);
+        $user = auth()->user();
+
+        return ApiResponse::success(
+            data: new UserResource($user),
+            message: 'User retrieved successfully'
+        );
     }
 }

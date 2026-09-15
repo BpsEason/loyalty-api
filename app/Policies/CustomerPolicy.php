@@ -11,7 +11,7 @@ use Illuminate\Auth\Access\HandlesAuthorization;
 class CustomerPolicy
 {
     use HandlesAuthorization;
-    
+
     public function viewAny(AuthUser $authUser): bool
     {
         return $authUser->can('ViewAny:Customer');
@@ -19,6 +19,16 @@ class CustomerPolicy
 
     public function view(AuthUser $authUser, Customer $customer): bool
     {
+        // Super admin can view any customer
+        if ($authUser->hasRole('super_admin')) {
+            return true;
+        }
+
+        // Regular users can only view customers from their own tenant
+        if ($authUser->tenant_id !== $customer->tenant_id) {
+            return false;
+        }
+
         return $authUser->can('View:Customer');
     }
 
@@ -29,11 +39,31 @@ class CustomerPolicy
 
     public function update(AuthUser $authUser, Customer $customer): bool
     {
+        // Super admin can update any customer
+        if ($authUser->hasRole('super_admin')) {
+            return true;
+        }
+
+        // Regular users can only update customers from their own tenant
+        if ($authUser->tenant_id !== $customer->tenant_id) {
+            return false;
+        }
+
         return $authUser->can('Update:Customer');
     }
 
     public function delete(AuthUser $authUser, Customer $customer): bool
     {
+        // Super admin can delete any customer
+        if ($authUser->hasRole('super_admin')) {
+            return true;
+        }
+
+        // Regular users can only delete customers from their own tenant
+        if ($authUser->tenant_id !== $customer->tenant_id) {
+            return false;
+        }
+
         return $authUser->can('Delete:Customer');
     }
 
@@ -71,5 +101,4 @@ class CustomerPolicy
     {
         return $authUser->can('Reorder:Customer');
     }
-
 }

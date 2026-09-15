@@ -18,11 +18,19 @@ class PointService
     public function earn(Customer $customer, int $amount, string $description = null, $reference = null, int $createdBy = null): PointTransaction
     {
         return DB::transaction(function () use ($customer, $amount, $description, $reference, $createdBy) {
-            /** @var PointAccount $account */
-            $account = $customer->pointAccount()->firstOrCreate(
-                ['customer_id' => $customer->id],
-                ['balance' => 0, 'total_earned' => 0, 'total_redeemed' => 0]
-            );
+            // 先檢查帳戶是否存在，不存在則建立
+            $existingAccount = $customer->pointAccount()->first();
+
+            if (!$existingAccount) {
+                $account = $customer->pointAccount()->create([
+                    'balance' => 0,
+                    'total_earned' => 0,
+                    'total_redeemed' => 0,
+                ]);
+            } else {
+                // 使用行鎖防止並發更新問題
+                $account = $customer->pointAccount()->lockForUpdate()->firstOrFail();
+            }
 
             $balanceBefore = $account->balance;
             $balanceAfter = $balanceBefore + $amount;
@@ -53,8 +61,9 @@ class PointService
     public function redeem(Customer $customer, int $amount, string $description = null, $reference = null, int $createdBy = null): PointTransaction
     {
         return DB::transaction(function () use ($customer, $amount, $description, $reference, $createdBy) {
+            // 使用行鎖防止並發更新問題
             /** @var PointAccount $account */
-            $account = $customer->pointAccount()->firstOrFail();
+            $account = $customer->pointAccount()->lockForUpdate()->firstOrFail();
 
             if ($account->balance < $amount) {
                 throw new \RuntimeException('Insufficient points to redeem');
@@ -89,11 +98,19 @@ class PointService
     public function adjust(Customer $customer, int $amount, string $description = null, $reference = null, int $createdBy = null): PointTransaction
     {
         return DB::transaction(function () use ($customer, $amount, $description, $reference, $createdBy) {
-            /** @var PointAccount $account */
-            $account = $customer->pointAccount()->firstOrCreate(
-                ['customer_id' => $customer->id],
-                ['balance' => 0, 'total_earned' => 0, 'total_redeemed' => 0]
-            );
+            // 先檢查帳戶是否存在，不存在則建立
+            $existingAccount = $customer->pointAccount()->first();
+
+            if (!$existingAccount) {
+                $account = $customer->pointAccount()->create([
+                    'balance' => 0,
+                    'total_earned' => 0,
+                    'total_redeemed' => 0,
+                ]);
+            } else {
+                // 使用行鎖防止並發更新問題
+                $account = $customer->pointAccount()->lockForUpdate()->firstOrFail();
+            }
 
             $balanceBefore = $account->balance;
             $balanceAfter = $balanceBefore + $amount;
@@ -153,5 +170,74 @@ class PointService
         $transaction->save();
 
         return $transaction;
+    }
+
+    /**
+     * 退款點數（將兌換的點數退回）
+     */
+    public function refund(Customer $customer, int $amount, string $description = null, $reference = null, int $createdBy = null): PointTransaction
+    {
+        return DB::transaction(function () use ($customer, $amount, $description, $reference, $createdBy) {
+            // 使用行鎖防止並發更新問題
+            /** @var PointAccount $account */
+            $account = $customer->pointAccount()->lockForUpdate()->firstOrFail();
+
+            $balanceBefore = $account->balance;
+            $balanceAfter = $balanceBefore + $amount;
+
+            // 更新帳戶餘額，退款視為退回點數，所以從 total_redeemed 中扣除
+            $account->update([
+                'balance' => $balanceAfter,
+                'total_redeemed' => max(0, $account->total_redeemed - $amount),
+            ]);
+
+            // 建立交易記錄
+            return $this->createTransaction(
+                PointTransaction::TYPE_REFUND,
+                $account,
+                $amount,
+                $balanceBefore,
+                $balanceAfter,
+                $description,
+                $reference,
+                $createdBy
+            );
+        });
+    }
+
+    /**
+     * 點數過期
+     */
+    public function expire(Customer $customer, int $amount, string $description = null, $reference = null, int $createdBy = null): PointTransaction
+    {
+        return DB::transaction(function () use ($customer, $amount, $description, $reference, $createdBy) {
+            // 使用行鎖防止並發更新問題
+            /** @var PointAccount $account */
+            $account = $customer->pointAccount()->lockForUpdate()->firstOrFail();
+
+            if ($account->balance < $amount) {
+                throw new \RuntimeException('Insufficient points to expire');
+            }
+
+            $balanceBefore = $account->balance;
+            $balanceAfter = $balanceBefore - $amount;
+
+            // 更新帳戶餘額
+            $account->update([
+                'balance' => $balanceAfter,
+            ]);
+
+            // 建立交易記錄
+            return $this->createTransaction(
+                PointTransaction::TYPE_EXPIRE,
+                $account,
+                $amount,
+                $balanceBefore,
+                $balanceAfter,
+                $description,
+                $reference,
+                $createdBy
+            );
+        });
     }
 }

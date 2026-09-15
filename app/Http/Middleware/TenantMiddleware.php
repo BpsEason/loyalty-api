@@ -16,6 +16,11 @@ class TenantMiddleware
         $user = auth()->user();
 
         if ($user) {
+            // Super admin can bypass tenant check
+            if ($user->hasRole('super_admin')) {
+                return $next($request);
+            }
+
             $tenant = $this->tenantResolver->resolveForUser($user);
 
             if (!$tenant) {
