@@ -6,10 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Auth\LoginRequest;
 use App\Http\Resources\Api\V1\UserResource;
 use App\Support\Api\ApiResponse;
-use Tymon\JWTAuth\Facades\JWTAuth;
-use Tymon\JWTAuth\Exceptions\JWTException;
-use OpenApi\Attributes as OA;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use OpenApi\Attributes as OA;
+use Tymon\JWTAuth\Exceptions\JWTException;
+use Tymon\JWTAuth\Exceptions\TokenExpiredException;
+use Tymon\JWTAuth\Exceptions\TokenInvalidException;
+use Tymon\JWTAuth\Facades\JWTAuth;
 
 /**
  * JWT Authentication Controller
@@ -17,68 +20,69 @@ use Illuminate\Http\Request;
 class AuthController extends Controller
 {
     #[OA\Post(
-        path: "/auth/login",
-        summary: "User login",
+        path: '/auth/login',
+        summary: 'User login',
+        tags: ['Authentication'],
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
-                required: ["email", "password"],
+                required: ['email', 'password'],
                 properties: [
-                    new OA\Property(property: "email", type: "string", format: "email"),
-                    new OA\Property(property: "password", type: "string")
+                    new OA\Property(property: 'email', type: 'string', format: 'email'),
+                    new OA\Property(property: 'password', type: 'string'),
                 ]
             )
         ),
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Login successful",
+                description: 'Login successful',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Login successful"),
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Login successful'),
                         new OA\Property(
-                            property: "data",
-                            type: "object",
+                            property: 'data',
+                            type: 'object',
                             properties: [
-                                new OA\Property(property: "access_token", type: "string"),
-                                new OA\Property(property: "token_type", type: "string", example: "Bearer"),
-                                new OA\Property(property: "expires_in", type: "integer", example: 3600),
-                                new OA\Property(property: "user", type: "object")
+                                new OA\Property(property: 'access_token', type: 'string'),
+                                new OA\Property(property: 'token_type', type: 'string', example: 'Bearer'),
+                                new OA\Property(property: 'expires_in', type: 'integer', example: 3600),
+                                new OA\Property(property: 'user', type: 'object'),
                             ]
-                        )
+                        ),
                     ]
                 )
             ),
             new OA\Response(
                 response: 401,
-                description: "Invalid credentials",
+                description: 'Invalid credentials',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: false),
-                        new OA\Property(property: "message", type: "string", example: "Invalid credentials"),
-                        new OA\Property(property: "data", type: "null", nullable: true),
-                        new OA\Property(property: "errors", type: "object", example: [])
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Invalid credentials'),
+                        new OA\Property(property: 'data', type: 'null', nullable: true),
+                        new OA\Property(property: 'errors', type: 'object', example: []),
                     ]
                 )
             ),
             new OA\Response(
                 response: 500,
-                description: "Could not create token",
+                description: 'Could not create token',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: false),
-                        new OA\Property(property: "message", type: "string", example: "Could not create token"),
-                        new OA\Property(property: "data", type: "null", nullable: true)
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Could not create token'),
+                        new OA\Property(property: 'data', type: 'null', nullable: true),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function login(LoginRequest $request)
+    public function login(LoginRequest $request): JsonResponse
     {
         try {
-            if (!$token = JWTAuth::attempt($request->only('email', 'password'))) {
+            if (! $token = JWTAuth::attempt($request->only('email', 'password'))) {
                 return ApiResponse::error(
                     message: 'Invalid credentials',
                     status: 401
@@ -98,31 +102,32 @@ class AuthController extends Controller
                 'access_token' => $token,
                 'token_type' => 'Bearer',
                 'expires_in' => JWTAuth::factory()->getTTL() * 60,
-                'user' => new UserResource($user)
+                'user' => new UserResource($user),
             ],
             message: 'Login successful'
         );
     }
 
     #[OA\Post(
-        path: "/auth/logout",
-        summary: "User logout",
-        security: [["bearerAuth" => []]],
+        path: '/auth/logout',
+        summary: 'User logout',
+        tags: ['Authentication'],
+        security: [['bearerAuth' => []]],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Logout successful",
+                description: 'Logout successful',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Successfully logged out"),
-                        new OA\Property(property: "data", type: "null", nullable: true)
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Successfully logged out'),
+                        new OA\Property(property: 'data', type: 'null', nullable: true),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function logout(Request $request)
+    public function logout(Request $request): JsonResponse
     {
         JWTAuth::invalidate(JWTAuth::getToken());
 
@@ -133,46 +138,52 @@ class AuthController extends Controller
     }
 
     #[OA\Post(
-        path: "/auth/refresh",
-        summary: "Refresh JWT token",
-        security: [["bearerAuth" => []]],
+        path: '/auth/refresh',
+        summary: 'Refresh JWT token',
+        tags: ['Authentication'],
+        security: [['bearerAuth' => []]],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Token refreshed successfully",
+                description: 'Token refreshed successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Token refreshed successfully"),
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Token refreshed successfully'),
                         new OA\Property(
-                            property: "data",
-                            type: "object",
+                            property: 'data',
+                            type: 'object',
                             properties: [
-                                new OA\Property(property: "access_token", type: "string"),
-                                new OA\Property(property: "token_type", type: "string", example: "Bearer"),
-                                new OA\Property(property: "expires_in", type: "integer", example: 3600)
+                                new OA\Property(property: 'access_token', type: 'string'),
+                                new OA\Property(property: 'token_type', type: 'string', example: 'Bearer'),
+                                new OA\Property(property: 'expires_in', type: 'integer', example: 3600),
                             ]
-                        )
+                        ),
                     ]
                 )
             ),
             new OA\Response(
-                response: 500,
-                description: "Could not refresh token",
+                response: 401,
+                description: 'Unauthorized / Token Invalid',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: false),
-                        new OA\Property(property: "message", type: "string", example: "Could not refresh token"),
-                        new OA\Property(property: "data", type: "null", nullable: true)
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Token has expired or is invalid'),
+                        new OA\Property(property: 'data', type: 'null', nullable: true),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function refresh()
+    public function refresh(): JsonResponse
     {
         try {
             $token = JWTAuth::refresh(JWTAuth::getToken());
+        } catch (TokenExpiredException | TokenInvalidException $e) {
+            return ApiResponse::error(
+                message: 'Token has expired or is invalid',
+                status: 401
+            );
         } catch (JWTException $e) {
             return ApiResponse::error(
                 message: 'Could not refresh token',
@@ -184,32 +195,33 @@ class AuthController extends Controller
             data: [
                 'access_token' => $token,
                 'token_type' => 'Bearer',
-                'expires_in' => JWTAuth::factory()->getTTL() * 60
+                'expires_in' => JWTAuth::factory()->getTTL() * 60,
             ],
             message: 'Token refreshed successfully'
         );
     }
 
     #[OA\Get(
-        path: "/auth/me",
-        summary: "Get current user",
-        security: [["bearerAuth" => []]],
+        path: '/auth/me',
+        summary: 'Get current user',
+        tags: ['Authentication'],
+        security: [['bearerAuth' => []]],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "User data retrieved successfully",
+                description: 'User data retrieved successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "User retrieved successfully"),
-                        new OA\Property(property: "data", type: "object"),
-                        new OA\Property(property: "errors", type: "object", example: [])
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'User retrieved successfully'),
+                        new OA\Property(property: 'data', type: 'object'),
+                        new OA\Property(property: 'errors', type: 'object', example: []),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function me()
+    public function me(): JsonResponse
     {
         $user = auth()->user();
 

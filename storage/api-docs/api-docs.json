@@ -1,19 +1,22 @@
 {
     "openapi": "3.0.0",
     "info": {
-        "title": "Multi-Tenant Loyalty API",
-        "description": "Multi-tenant loyalty point management API",
+        "title": "多租戶會員忠誠度系統 API",
+        "description": "多租戶點數管理系統 API 服務文件",
         "version": "1.0.0"
     },
     "servers": [
         {
             "url": "/api/v1",
-            "description": "API Server"
+            "description": "API 主要伺服器"
         }
     ],
     "paths": {
         "/auth/login": {
             "post": {
+                "tags": [
+                    "Authentication"
+                ],
                 "summary": "User login",
                 "operationId": "985cd5203e2d0a820e113f2f4fdb2847",
                 "requestBody": {
@@ -136,6 +139,9 @@
         },
         "/auth/logout": {
             "post": {
+                "tags": [
+                    "Authentication"
+                ],
                 "summary": "User logout",
                 "operationId": "a05022a34eef599e04fb0a5254375b84",
                 "responses": {
@@ -173,6 +179,9 @@
         },
         "/auth/refresh": {
             "post": {
+                "tags": [
+                    "Authentication"
+                ],
                 "summary": "Refresh JWT token",
                 "operationId": "03c7bb98658eb98880114621321bd8d8",
                 "responses": {
@@ -212,8 +221,8 @@
                             }
                         }
                     },
-                    "500": {
-                        "description": "Could not refresh token",
+                    "401": {
+                        "description": "Unauthorized / Token Invalid",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -224,7 +233,7 @@
                                         },
                                         "message": {
                                             "type": "string",
-                                            "example": "Could not refresh token"
+                                            "example": "Token has expired or is invalid"
                                         },
                                         "data": {
                                             "type": "null",
@@ -246,6 +255,9 @@
         },
         "/auth/me": {
             "get": {
+                "tags": [
+                    "Authentication"
+                ],
                 "summary": "Get current user",
                 "operationId": "e339e0e74860c0647fd1d41bbbbc13b2",
                 "responses": {
@@ -286,6 +298,9 @@
         },
         "/customers": {
             "get": {
+                "tags": [
+                    "Customers"
+                ],
                 "summary": "Get list of customers",
                 "operationId": "2a2e8777a73f84307e0af1db6bbd9b03",
                 "responses": {
@@ -323,6 +338,9 @@
                 ]
             },
             "post": {
+                "tags": [
+                    "Customers"
+                ],
                 "summary": "Create a new customer",
                 "operationId": "047828a976c6178185a7716d2bad1117",
                 "requestBody": {
@@ -413,6 +431,9 @@
         },
         "/customers/{customer}": {
             "get": {
+                "tags": [
+                    "Customers"
+                ],
                 "summary": "Get a specific customer",
                 "operationId": "978b36d9e308513d0a4441539631f572",
                 "parameters": [
@@ -477,6 +498,9 @@
                 ]
             },
             "put": {
+                "tags": [
+                    "Customers"
+                ],
                 "summary": "Update a customer",
                 "operationId": "aee7478bb18d6fef353a28a9eeed3afe",
                 "parameters": [
@@ -554,6 +578,9 @@
                 ]
             },
             "delete": {
+                "tags": [
+                    "Customers"
+                ],
                 "summary": "Delete a customer",
                 "operationId": "f64816221eba805da8e7a652b0e7857b",
                 "parameters": [
@@ -604,6 +631,9 @@
         },
         "/customers/{customer}/points": {
             "get": {
+                "tags": [
+                    "Point Accounts"
+                ],
                 "summary": "Get point account for a specific customer",
                 "operationId": "493b586aa1b21f23f86d53fd6d9e556b",
                 "parameters": [
@@ -670,6 +700,9 @@
         },
         "/customers/{customer}/point-transactions": {
             "get": {
+                "tags": [
+                    "Point Transactions"
+                ],
                 "summary": "Get list of point transactions for a customer",
                 "operationId": "da3a9ad2e43de0933b21576dda2146ff",
                 "parameters": [
@@ -717,6 +750,9 @@
                 ]
             },
             "post": {
+                "tags": [
+                    "Point Transactions"
+                ],
                 "summary": "Create a new point transaction",
                 "operationId": "b4b9bf9f7c96cced916bfea238619cd0",
                 "parameters": [
@@ -843,6 +879,9 @@
         },
         "/customers/{customer}/point-transactions/{pointTransaction}": {
             "get": {
+                "tags": [
+                    "Point Transactions"
+                ],
                 "summary": "Get a specific point transaction",
                 "operationId": "b6b101d0bbba665c3108dec5d2dea25d",
                 "parameters": [
@@ -1099,5 +1138,23 @@
                 "scheme": "bearer"
             }
         }
-    }
+    },
+    "tags": [
+        {
+            "name": "Authentication",
+            "description": "Authentication"
+        },
+        {
+            "name": "Customers",
+            "description": "Customers"
+        },
+        {
+            "name": "Point Accounts",
+            "description": "Point Accounts"
+        },
+        {
+            "name": "Point Transactions",
+            "description": "Point Transactions"
+        }
+    ]
 }

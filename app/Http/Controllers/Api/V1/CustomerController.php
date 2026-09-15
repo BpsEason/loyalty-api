@@ -8,6 +8,7 @@ use App\Http\Requests\Api\V1\Customer\CustomerUpdateRequest;
 use App\Http\Resources\Api\V1\Customer\CustomerResource;
 use App\Models\Customer;
 use App\Support\Api\ApiResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use OpenApi\Attributes as OA;
 
@@ -22,24 +23,29 @@ class CustomerController extends Controller
     }
 
     #[OA\Get(
-        path: "/customers",
-        summary: "Get list of customers",
-        security: [["bearerAuth" => []]],
+        path: '/customers',
+        summary: 'Get list of customers',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Customers retrieved successfully",
+                description: 'Customers retrieved successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Customers retrieved successfully"),
-                        new OA\Property(property: "data", type: "array", items: new OA\Items(ref: "#/components/schemas/Customer"))
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Customers retrieved successfully'),
+                        new OA\Property(
+                            property: 'data',
+                            type: 'array',
+                            items: new OA\Items(ref: '#/components/schemas/Customer')
+                        ),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
         $customers = Customer::with('tenant')->paginate();
 
@@ -50,47 +56,48 @@ class CustomerController extends Controller
     }
 
     #[OA\Post(
-        path: "/customers",
-        summary: "Create a new customer",
-        security: [["bearerAuth" => []]],
+        path: '/customers',
+        summary: 'Create a new customer',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
-                required: ["name", "email"],
+                required: ['name', 'email'],
                 properties: [
-                    new OA\Property(property: "name", type: "string"),
-                    new OA\Property(property: "email", type: "string", format: "email"),
-                    new OA\Property(property: "phone", type: "string", nullable: true),
-                    new OA\Property(property: "metadata", type: "object", nullable: true)
+                    new OA\Property(property: 'name', type: 'string'),
+                    new OA\Property(property: 'email', type: 'string', format: 'email'),
+                    new OA\Property(property: 'phone', type: 'string', nullable: true),
+                    new OA\Property(property: 'metadata', type: 'object', nullable: true),
                 ]
             )
         ),
         responses: [
             new OA\Response(
                 response: 201,
-                description: "Customer created successfully",
+                description: 'Customer created successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Customer created successfully"),
-                        new OA\Property(property: "data", ref: "#/components/schemas/Customer")
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Customer created successfully'),
+                        new OA\Property(property: 'data', ref: '#/components/schemas/Customer'),
                     ]
                 )
             ),
             new OA\Response(
                 response: 422,
-                description: "Validation error",
+                description: 'Validation error',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: false),
-                        new OA\Property(property: "message", type: "string", example: "Validation failed"),
-                        new OA\Property(property: "errors", type: "object")
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Validation failed'),
+                        new OA\Property(property: 'errors', type: 'object'),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function store(CustomerStoreRequest $request)
+    public function store(CustomerStoreRequest $request): JsonResponse
     {
         $customer = Customer::create($request->validated());
 
@@ -102,37 +109,38 @@ class CustomerController extends Controller
     }
 
     #[OA\Get(
-        path: "/customers/{customer}",
-        summary: "Get a specific customer",
-        security: [["bearerAuth" => []]],
+        path: '/customers/{customer}',
+        summary: 'Get a specific customer',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
         parameters: [
-            new OA\Parameter(name: "customer", in: "path", required: true, schema: new OA\Schema(type: "integer"))
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
         ],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Customer retrieved successfully",
+                description: 'Customer retrieved successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Customer retrieved successfully"),
-                        new OA\Property(property: "data", ref: "#/components/schemas/Customer")
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Customer retrieved successfully'),
+                        new OA\Property(property: 'data', ref: '#/components/schemas/Customer'),
                     ]
                 )
             ),
             new OA\Response(
                 response: 404,
-                description: "Customer not found",
+                description: 'Customer not found',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: false),
-                        new OA\Property(property: "message", type: "string", example: "Customer not found")
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Customer not found'),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function show(Customer $customer)
+    public function show(Customer $customer): JsonResponse
     {
         $customer->load('tenant');
 
@@ -143,46 +151,47 @@ class CustomerController extends Controller
     }
 
     #[OA\Put(
-        path: "/customers/{customer}",
-        summary: "Update a customer",
-        security: [["bearerAuth" => []]],
+        path: '/customers/{customer}',
+        summary: 'Update a customer',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
         parameters: [
-            new OA\Parameter(name: "customer", in: "path", required: true, schema: new OA\Schema(type: "integer"))
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
         ],
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
                 properties: [
-                    new OA\Property(property: "name", type: "string"),
-                    new OA\Property(property: "email", type: "string", format: "email"),
-                    new OA\Property(property: "phone", type: "string", nullable: true),
-                    new OA\Property(property: "metadata", type: "object", nullable: true)
+                    new OA\Property(property: 'name', type: 'string'),
+                    new OA\Property(property: 'email', type: 'string', format: 'email'),
+                    new OA\Property(property: 'phone', type: 'string', nullable: true),
+                    new OA\Property(property: 'metadata', type: 'object', nullable: true),
                 ]
             )
         ),
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Customer updated successfully",
+                description: 'Customer updated successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Customer updated successfully"),
-                        new OA\Property(property: "data", ref: "#/components/schemas/Customer")
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Customer updated successfully'),
+                        new OA\Property(property: 'data', ref: '#/components/schemas/Customer'),
                     ]
                 )
             ),
             new OA\Response(
                 response: 404,
-                description: "Customer not found"
+                description: 'Customer not found'
             ),
             new OA\Response(
                 response: 422,
-                description: "Validation error"
-            )
+                description: 'Validation error'
+            ),
         ]
     )]
-    public function update(CustomerUpdateRequest $request, Customer $customer)
+    public function update(CustomerUpdateRequest $request, Customer $customer): JsonResponse
     {
         $customer->update($request->validated());
 
@@ -193,31 +202,32 @@ class CustomerController extends Controller
     }
 
     #[OA\Delete(
-        path: "/customers/{customer}",
-        summary: "Delete a customer",
-        security: [["bearerAuth" => []]],
+        path: '/customers/{customer}',
+        summary: 'Delete a customer',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
         parameters: [
-            new OA\Parameter(name: "customer", in: "path", required: true, schema: new OA\Schema(type: "integer"))
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
         ],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Customer deleted successfully",
+                description: 'Customer deleted successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Customer deleted successfully"),
-                        new OA\Property(property: "data", type: "null", nullable: true)
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Customer deleted successfully'),
+                        new OA\Property(property: 'data', type: 'null', nullable: true),
                     ]
                 )
             ),
             new OA\Response(
                 response: 404,
-                description: "Customer not found"
-            )
+                description: 'Customer not found'
+            ),
         ]
     )]
-    public function destroy(Customer $customer)
+    public function destroy(Customer $customer): JsonResponse
     {
         $customer->delete();
 

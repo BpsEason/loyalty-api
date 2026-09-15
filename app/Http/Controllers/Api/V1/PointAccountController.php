@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\PointAccount\PointAccountResource;
 use App\Models\Customer;
 use App\Support\Api\ApiResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use OpenApi\Attributes as OA;
 
@@ -15,42 +16,49 @@ use OpenApi\Attributes as OA;
 class PointAccountController extends Controller
 {
     #[OA\Get(
-        path: "/customers/{customer}/points",
-        summary: "Get point account for a specific customer",
-        security: [["bearerAuth" => []]],
+        path: '/customers/{customer}/points',
+        summary: 'Get point account for a specific customer',
+        tags: ['Point Accounts'],
+        security: [['bearerAuth' => []]],
         parameters: [
-            new OA\Parameter(name: "customer", in: "path", required: true, schema: new OA\Schema(type: "integer"))
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
         ],
         responses: [
             new OA\Response(
                 response: 200,
-                description: "Point account retrieved successfully",
+                description: 'Point account retrieved successfully',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "message", type: "string", example: "Point account retrieved successfully"),
-                        new OA\Property(property: "data", ref: "#/components/schemas/PointAccount")
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Point account retrieved successfully'),
+                        new OA\Property(property: 'data', ref: '#/components/schemas/PointAccount'),
                     ]
                 )
             ),
             new OA\Response(
                 response: 404,
-                description: "Point account not found",
+                description: 'Point account not found',
                 content: new OA\JsonContent(
                     properties: [
-                        new OA\Property(property: "success", type: "boolean", example: false),
-                        new OA\Property(property: "message", type: "string", example: "Point account not found")
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Point account not found'),
                     ]
                 )
-            )
+            ),
         ]
     )]
-    public function show(Request $request, Customer $customer)
+    public function show(Request $request, Customer $customer): JsonResponse
     {
+        // 建議加上 Policy 授權檢查
+        // $this->authorize('view', $customer);
+
         $pointAccount = $customer->pointAccount;
 
-        if (!$pointAccount) {
-            return ApiResponse::error('Point account not found', null, [], 404);
+        if (! $pointAccount) {
+            return ApiResponse::error(
+                message: 'Point account not found',
+                status: 404
+            );
         }
 
         return ApiResponse::success(

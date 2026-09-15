@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 use Tymon\JWTAuth\Facades\JWTAuth;
 
@@ -29,17 +30,17 @@ class AuthApiTest extends TestCase
                 'name' => 'Test User',
                 'password' => bcrypt('password123'),
                 'tenant_id' => $tenant->id,
-                'role' => 'user'
+                'role' => 'user',
             ]
         );
     }
 
-    /** @test */
+    #[Test]
     public function user_can_login_with_correct_credentials(): void
     {
         $response = $this->postJson('/api/v1/auth/login', [
             'email' => 'test@example.com',
-            'password' => 'password123'
+            'password' => 'password123',
         ]);
 
         $response->assertStatus(200)
@@ -50,31 +51,31 @@ class AuthApiTest extends TestCase
                     'access_token',
                     'token_type',
                     'expires_in',
-                    'user'
-                ]
+                    'user',
+                ],
             ])
             ->assertJson([
                 'success' => true,
-                'message' => 'Login successful'
+                'message' => 'Login successful',
             ]);
     }
 
-    /** @test */
+    #[Test]
     public function user_cannot_login_with_wrong_password(): void
     {
         $response = $this->postJson('/api/v1/auth/login', [
             'email' => 'test@example.com',
-            'password' => 'wrongpassword'
+            'password' => 'wrongpassword',
         ]);
 
         $response->assertStatus(401)
             ->assertJson([
                 'success' => false,
-                'message' => 'Invalid credentials'
+                'message' => 'Invalid credentials',
             ]);
     }
 
-    /** @test */
+    #[Test]
     public function login_requires_email_and_password(): void
     {
         $response = $this->postJson('/api/v1/auth/login', []);
@@ -83,33 +84,33 @@ class AuthApiTest extends TestCase
             ->assertJsonStructure([
                 'success',
                 'message',
-                'errors' => ['email', 'password']
+                'errors' => ['email', 'password'],
             ]);
     }
 
-    /** @test */
+    #[Test]
     public function authenticated_user_can_get_their_profile(): void
     {
         $user = User::where('email', 'test@example.com')->first();
         $token = JWTAuth::fromUser($user);
 
         $response = $this->withHeaders([
-            'Authorization' => "Bearer {$token}"
+            'Authorization' => "Bearer {$token}",
         ])->getJson('/api/v1/auth/me');
 
         $response->assertStatus(200)
             ->assertJsonStructure([
                 'success',
                 'message',
-                'data'
+                'data',
             ])
             ->assertJson([
                 'success' => true,
-                'message' => 'User retrieved successfully'
+                'message' => 'User retrieved successfully',
             ]);
     }
 
-    /** @test */
+    #[Test]
     public function unauthenticated_user_cannot_access_profile(): void
     {
         $response = $this->getJson('/api/v1/auth/me');
@@ -117,47 +118,47 @@ class AuthApiTest extends TestCase
         $response->assertStatus(401)
             ->assertJson([
                 'success' => false,
-                'message' => 'Unauthenticated'
+                'message' => 'Unauthenticated',
             ]);
     }
 
-    /** @test */
+    #[Test]
     public function user_can_refresh_their_token(): void
     {
         $user = User::where('email', 'test@example.com')->first();
         $token = JWTAuth::fromUser($user);
 
         $response = $this->withHeaders([
-            'Authorization' => "Bearer {$token}"
+            'Authorization' => "Bearer {$token}",
         ])->postJson('/api/v1/auth/refresh');
 
         $response->assertStatus(200)
             ->assertJsonStructure([
                 'success',
                 'message',
-                'data' => ['access_token', 'token_type', 'expires_in']
+                'data' => ['access_token', 'token_type', 'expires_in'],
             ])
             ->assertJson([
                 'success' => true,
-                'message' => 'Token refreshed successfully'
+                'message' => 'Token refreshed successfully',
             ]);
     }
 
-    /** @test */
+    #[Test]
     public function user_can_logout(): void
     {
         $user = User::where('email', 'test@example.com')->first();
         $token = JWTAuth::fromUser($user);
 
         $response = $this->withHeaders([
-            'Authorization' => "Bearer {$token}"
+            'Authorization' => "Bearer {$token}",
         ])->postJson('/api/v1/auth/logout');
 
         $response->assertStatus(200)
             ->assertJson([
                 'success' => true,
                 'message' => 'Successfully logged out',
-                'data' => null
+                'data' => null,
             ]);
     }
 }
