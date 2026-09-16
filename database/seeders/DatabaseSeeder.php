@@ -151,6 +151,9 @@ class DatabaseSeeder extends Seeder
                 }
             }
         }
+
+        // 執行獎勵系統測試資料
+        $this->call(RewardSeeder::class);
     }
 
     /**

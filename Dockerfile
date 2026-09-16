@@ -1,9 +1,20 @@
 FROM php:8.2-fpm
 
-# 安裝系統依賴
+# 安裝系統依賴與開發工具
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    wget \
+    vim \
+    nano \
+    less \
+    grep \
+    findutils \
+    tree \
+    procps \
+    iproute2 \
+    iputils-ping \
+    net-tools \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
@@ -11,6 +22,9 @@ RUN apt-get update && apt-get install -y \
     libicu-dev \
     zip \
     unzip \
+    tar \
+    gzip \
+    bash \
     && rm -rf /var/lib/apt/lists/*
 
 # 安裝 PHP 擴展

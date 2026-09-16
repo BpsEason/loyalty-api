@@ -13,7 +13,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(\App\Services\Reward\RewardService::class, function ($app) {
+            return new \App\Services\Reward\RewardService(
+                $app->make(\App\Services\Point\PointService::class),
+                $app->make(\App\Support\Tenancy\TenantResolver::class)
+            );
+        });
     }
 
     /**

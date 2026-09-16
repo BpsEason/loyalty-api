@@ -12,15 +12,16 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('point_accounts', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('tenant_id')->constrained()->onDelete('cascade');
-            $table->foreignId('customer_id')->constrained()->onDelete('cascade');
-            $table->integer('balance')->default(0);
-            $table->integer('total_earned')->default(0);
-            $table->integer('total_redeemed')->default(0);
+            $table->id()->comment('點數帳戶ID');
+            $table->foreignId('tenant_id')->constrained()->onDelete('cascade')->comment('所屬租戶ID');
+            $table->foreignId('customer_id')->constrained()->onDelete('cascade')->comment('關聯客戶ID');
+            $table->integer('balance')->default(0)->comment('目前點數餘額');
+            $table->integer('total_earned')->default(0)->comment('累計獲得點數');
+            $table->integer('total_redeemed')->default(0)->comment('累計使用點數');
             $table->timestamps();
 
-            $table->unique(['tenant_id', 'customer_id']);
+            $table->unique(['tenant_id', 'customer_id'])->comment('同一租戶內每個客戶僅有一個點數帳戶');
+            $table->comment('客戶點數帳戶資料表');
         });
     }
 
