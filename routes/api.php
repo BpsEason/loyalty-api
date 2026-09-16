@@ -27,6 +27,13 @@ Route::prefix('v1')->group(function () {
             Route::get('customers/{customer}/point-transactions', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'index']);
             Route::get('customers/{customer}/point-transactions/{pointTransaction}', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'show']);
             Route::post('customers/{customer}/point-transactions', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'store'])->middleware('idempotent');
+
+            // QR Code & POS Scan endpoints for demo flow
+            Route::get('customers/{customer}/qr-code', [\App\Http\Controllers\Api\V1\CustomerController::class, 'getQrCode']);
+            Route::post('customers/identify', [\App\Http\Controllers\Api\V1\CustomerController::class, 'identifyByQrToken']);
+
+            // POS-specific redemption endpoint (semantic route)
+            Route::post('customers/{customer}/points/redeem', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'redeem'])->middleware('idempotent');
         });
     });
 });

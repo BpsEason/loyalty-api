@@ -640,6 +640,147 @@
                 ]
             }
         },
+        "/customers/{customer}/qr-code": {
+            "get": {
+                "tags": [
+                    "Customers"
+                ],
+                "summary": "Get customer QR code data",
+                "operationId": "d6b0e1f7a051c417d09ed2bcc27ce43a",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "QR code data retrieved successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "QR code data retrieved successfully"
+                                        },
+                                        "data": {
+                                            "properties": {
+                                                "member_code": {
+                                                    "type": "string",
+                                                    "example": "M001001"
+                                                },
+                                                "qr_token": {
+                                                    "type": "string",
+                                                    "example": "abc123xyz..."
+                                                },
+                                                "scan_url": {
+                                                    "type": "string",
+                                                    "example": "https://api.example.com/scan?token=abc123"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/customers/identify": {
+            "post": {
+                "tags": [
+                    "Customers"
+                ],
+                "summary": "Identify customer by QR token (POS scan endpoint)",
+                "operationId": "1ec3b54e03541def04afe74d77e7e064",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "qr_token"
+                                ],
+                                "properties": {
+                                    "qr_token": {
+                                        "type": "string",
+                                        "example": "abc123xyz..."
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Customer identified successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Customer identified successfully"
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Customer"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Invalid QR token",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": false
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Invalid or expired QR code"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
         "/customers/{customer}/points": {
             "get": {
                 "tags": [
@@ -988,6 +1129,124 @@
                     }
                 ]
             }
+        },
+        "/customers/{customer}/points/redeem": {
+            "post": {
+                "tags": [
+                    "Point Transactions"
+                ],
+                "summary": "Redeem points for a customer (POS-specific endpoint)",
+                "operationId": "770d50977e62966966f6f078638a93b0",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "X-Tenant-ID",
+                        "in": "header",
+                        "description": "Tenant ID for external system integration",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "description": "Unique key to prevent duplicate transactions",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "amount"
+                                ],
+                                "properties": {
+                                    "amount": {
+                                        "type": "integer",
+                                        "example": 100,
+                                        "minimum": 1
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "example": "Redeemed at POS",
+                                        "nullable": true
+                                    },
+                                    "reference": {
+                                        "description": "POS order reference ID",
+                                        "type": "string",
+                                        "example": "POS-ORDER-12345",
+                                        "nullable": true
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Points redeemed successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Points redeemed successfully"
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/PointTransaction"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation error or insufficient points",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": false
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Insufficient points to redeem"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
         }
     },
     "components": {
@@ -1040,6 +1299,16 @@
                             }
                         },
                         "type": "object",
+                        "nullable": true
+                    },
+                    "member_code": {
+                        "type": "string",
+                        "example": "M001001",
+                        "nullable": true
+                    },
+                    "qr_token": {
+                        "type": "string",
+                        "example": "abc123xyz...",
                         "nullable": true
                     },
                     "created_at": {

@@ -202,9 +202,9 @@ class PointTransactionController extends Controller
                 createdBy: auth()->id()
             );
 
-            // 如果有冪等性金鑰，快取交易ID 24小時
+            // 儲存冪等性快取
             if ($idempotencyKey) {
-                cache()->put("idempotency:{$idempotencyKey}", $transaction->id, 86400);
+                cache()->put("idempotency:{$idempotencyKey}", $transaction->id, now()->addHours(24));
             }
 
             return ApiResponse::success(
@@ -212,12 +212,108 @@ class PointTransactionController extends Controller
                 message: 'Point transaction created successfully',
                 status: 201
             );
-        } catch (\InvalidArgumentException | \RuntimeException $e) {
-            return ApiResponse::error($e->getMessage(), null, [], 422);
-        } catch (\Throwable $e) {
-            report($e); // 紀錄真正的系統異常，避免 Exception 被吞掉
+        } catch (\RuntimeException $e) {
+            return ApiResponse::error(
+                message: $e->getMessage(),
+                status: 422
+            );
+        }
+    }
 
-            return ApiResponse::error('Transaction could not be processed', null, [], 409);
+    #[OA\Post(
+        path: '/customers/{customer}/points/redeem',
+        summary: 'Redeem points for a customer (POS-specific endpoint)',
+        tags: ['Point Transactions'],
+        security: [['bearerAuth' => []]],
+        parameters: [
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+            new OA\Parameter(name: 'X-Tenant-ID', in: 'header', required: false, schema: new OA\Schema(type: 'integer'), description: 'Tenant ID for external system integration'),
+            new OA\Parameter(name: 'Idempotency-Key', in: 'header', required: false, schema: new OA\Schema(type: 'string'), description: 'Unique key to prevent duplicate transactions'),
+        ],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\JsonContent(
+                required: ['amount'],
+                properties: [
+                    new OA\Property(property: 'amount', type: 'integer', example: 100, minimum: 1),
+                    new OA\Property(property: 'description', type: 'string', nullable: true, example: 'Redeemed at POS'),
+                    new OA\Property(property: 'reference', type: 'string', nullable: true, example: 'POS-ORDER-12345', description: 'POS order reference ID'),
+                ]
+            )
+        ),
+        responses: [
+            new OA\Response(
+                response: 201,
+                description: 'Points redeemed successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Points redeemed successfully'),
+                        new OA\Property(property: 'data', ref: '#/components/schemas/PointTransaction'),
+                    ]
+                )
+            ),
+            new OA\Response(
+                response: 422,
+                description: 'Validation error or insufficient points',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Insufficient points to redeem'),
+                    ]
+                )
+            ),
+        ]
+    )]
+    public function redeem(Request $request, Customer $customer, PointService $pointService): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount' => 'required|integer|min:1',
+            'description' => 'nullable|string',
+            'reference' => 'nullable|string',
+        ]);
+
+        // 冪等性檢查
+        $idempotencyKey = $request->header('Idempotency-Key');
+        if ($idempotencyKey) {
+            $cachedTransactionId = cache()->get("idempotency:{$idempotencyKey}");
+            if ($cachedTransactionId) {
+                $existingTransaction = PointTransaction::find($cachedTransactionId);
+                if ($existingTransaction) {
+                    return ApiResponse::success(
+                        data: new PointTransactionResource($existingTransaction),
+                        message: 'Points retrieved (idempotent)',
+                        status: 200
+                    );
+                }
+                cache()->forget("idempotency:{$idempotencyKey}");
+            }
+        }
+
+        try {
+            $transaction = $pointService->redeem(
+                customer: $customer,
+                amount: $validated['amount'],
+                description: $validated['description'] ?? 'Redeemed at POS',
+                reference: $validated['reference'] ?? null,
+                createdBy: auth()->id()
+            );
+
+            // 儲存冪等性快取
+            if ($idempotencyKey) {
+                cache()->put("idempotency:{$idempotencyKey}", $transaction->id, now()->addHours(24));
+            }
+
+            return ApiResponse::success(
+                data: new PointTransactionResource($transaction),
+                message: 'Points redeemed successfully',
+                status: 201
+            );
+        } catch (\RuntimeException $e) {
+            return ApiResponse::error(
+                message: $e->getMessage(),
+                status: 422
+            );
         }
     }
 }

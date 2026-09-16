@@ -150,6 +150,110 @@ class CustomerController extends Controller
         );
     }
 
+    #[OA\Get(
+        path: '/customers/{customer}/qr-code',
+        summary: 'Get customer QR code data',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
+        parameters: [
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'QR code data retrieved successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'QR code data retrieved successfully'),
+                        new OA\Property(
+                            property: 'data',
+                            properties: [
+                                new OA\Property(property: 'member_code', type: 'string', example: 'M001001'),
+                                new OA\Property(property: 'qr_token', type: 'string', example: 'abc123xyz...'),
+                                new OA\Property(property: 'scan_url', type: 'string', example: 'https://api.example.com/scan?token=abc123'),
+                            ]
+                        ),
+                    ]
+                )
+            ),
+        ]
+    )]
+    public function getQrCode(Customer $customer): JsonResponse
+    {
+        return ApiResponse::success(
+            data: [
+                'member_code' => $customer->member_code,
+                'qr_token' => $customer->qr_token,
+                'scan_url' => url("/api/v1/customers/identify?token={$customer->qr_token}"),
+            ],
+            message: 'QR code data retrieved successfully'
+        );
+    }
+
+    #[OA\Post(
+        path: '/customers/identify',
+        summary: 'Identify customer by QR token (POS scan endpoint)',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\JsonContent(
+                required: ['qr_token'],
+                properties: [
+                    new OA\Property(property: 'qr_token', type: 'string', example: 'abc123xyz...'),
+                ]
+            )
+        ),
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Customer identified successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Customer identified successfully'),
+                        new OA\Property(property: 'data', ref: '#/components/schemas/Customer'),
+                    ]
+                )
+            ),
+            new OA\Response(
+                response: 404,
+                description: 'Invalid QR token',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: false),
+                        new OA\Property(property: 'message', type: 'string', example: 'Invalid or expired QR code'),
+                    ]
+                )
+            ),
+        ]
+    )]
+    public function identifyByQrToken(Request $request): JsonResponse
+    {
+        $request->validate([
+            'qr_token' => 'required|string',
+        ]);
+
+        $customer = Customer::where('qr_token', $request->qr_token)
+            ->where('tenant_id', tenant()->id) // 確保只能識別當前租戶的客戶
+            ->first();
+
+        if (!$customer) {
+            return ApiResponse::error(
+                message: 'Invalid or expired QR code',
+                status: 404
+            );
+        }
+
+        $customer->load('tenant');
+
+        return ApiResponse::success(
+            data: new CustomerResource($customer),
+            message: 'Customer identified successfully'
+        );
+    }
+
     #[OA\Put(
         path: '/customers/{customer}',
         summary: 'Update a customer',

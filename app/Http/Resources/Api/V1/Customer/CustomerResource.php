@@ -26,6 +26,8 @@ use OpenApi\Attributes as OA;
                 new OA\Property(property: "domain", type: "string", example: "acme.example.com", nullable: true),
             ]
         ),
+        new OA\Property(property: "member_code", type: "string", example: "M001001", nullable: true),
+        new OA\Property(property: "qr_token", type: "string", example: "abc123xyz...", nullable: true),
         new OA\Property(property: "created_at", type: "string", format: "date-time", example: "2026-09-15T00:00:00Z"),
         new OA\Property(property: "updated_at", type: "string", format: "date-time", example: "2026-09-15T00:00:00Z"),
     ]
@@ -47,6 +49,8 @@ class CustomerResource extends JsonResource
             'email' => $this->email,
             'phone' => $this->phone,
             'metadata' => $this->metadata,
+            'member_code' => $this->member_code,
+            'qr_token' => $this->qr_token,
             'tenant' => $this->when($this->relationLoaded('tenant'), [
                 'id' => $this->tenant?->id,
                 'name' => $this->tenant?->name,

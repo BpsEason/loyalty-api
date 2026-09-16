@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Support\Api\ApiResponse;
+use App\Support\Tenancy\TenantContext;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -10,6 +11,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class IdempotencyMiddleware
 {
+    public function __construct(protected TenantContext $tenantContext) {}
+
     public function handle(Request $request, Closure $next): Response
     {
         $idempotencyKey = $request->header('Idempotency-Key');
@@ -18,7 +21,9 @@ class IdempotencyMiddleware
             return $next($request);
         }
 
-        $tenantId = $request->header('X-Tenant-ID', 'global');
+        // 從TenantContext獲取正確的租戶ID，確保跨租戶的冪等性鍵不會碰撞
+        $tenant = $this->tenantContext->getTenant();
+        $tenantId = $tenant ? $tenant->id : $request->header('X-Tenant-ID', 'global');
         $cacheKey = "idempotency:{$tenantId}:{$idempotencyKey}";
 
         // 檢查快取中是否已有先前儲存的回應

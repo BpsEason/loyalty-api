@@ -71,42 +71,44 @@ class RewardService
 
         try {
             return $lock->block($this->lockWaitSeconds, function () use ($customer, $campaignReward) {
-                return DB::transaction(function () use ($customer, $campaignReward) {
-                    // 先檢查活動是否有效
-                    $campaign = $campaignReward->campaign;
-                    if ($campaign->status !== Campaign::STATUS_ACTIVE) {
-                        throw new RuntimeException('活動未處於活躍狀態');
-                    }
+                // 先獲取活動實例
+                $campaign = $campaignReward->campaign;
+                // 先建立待處理的獎勵發放記錄（不在事務內，確保失敗也能持久化）
+                /** @var RewardGrant $rewardGrant */
+                $rewardGrant = RewardGrant::create([
+                    'tenant_id' => $customer->tenant_id,
+                    'campaign_id' => $campaign->id,
+                    'campaign_reward_id' => $campaignReward->id,
+                    'customer_id' => $customer->id,
+                    'status' => RewardGrant::STATUS_PENDING,
+                ]);
 
-                    if (!$campaignReward->enabled) {
-                        throw new RuntimeException('此獎勵已停用');
-                    }
+                try {
+                    // 所有驗證和成功邏輯放在數據庫事務中，確保只有成功時才提交點數變更
+                    return DB::transaction(function () use ($customer, $campaignReward, $campaign, $rewardGrant) {
+                        // 先檢查活動是否有效
+                        if ($campaign->status !== Campaign::STATUS_ACTIVE) {
+                            throw new RuntimeException('活動未處於活躍狀態');
+                        }
 
-                    // 檢查活動時間
-                    $now = now();
-                    if ($campaign->starts_at && $now->lt($campaign->starts_at)) {
-                        throw new RuntimeException('活動尚未開始');
-                    }
-                    if ($campaign->ends_at && $now->gt($campaign->ends_at)) {
-                        throw new RuntimeException('活動已結束');
-                    }
+                        if (!$campaignReward->enabled) {
+                            throw new RuntimeException('此獎勵已停用');
+                        }
 
-                    // 檢查租戶一致性
-                    if ($customer->tenant_id !== $campaign->tenant_id) {
-                        throw new RuntimeException('客戶與活動租戶不一致');
-                    }
+                        // 檢查活動時間
+                        $now = now();
+                        if ($campaign->starts_at && $now->lt($campaign->starts_at)) {
+                            throw new RuntimeException('活動尚未開始');
+                        }
+                        if ($campaign->ends_at && $now->gt($campaign->ends_at)) {
+                            throw new RuntimeException('活動已結束');
+                        }
 
-                    // 先建立待處理的獎勵發放記錄
-                    /** @var RewardGrant $rewardGrant */
-                    $rewardGrant = RewardGrant::create([
-                        'tenant_id' => $customer->tenant_id,
-                        'campaign_id' => $campaign->id,
-                        'campaign_reward_id' => $campaignReward->id,
-                        'customer_id' => $customer->id,
-                        'status' => RewardGrant::STATUS_PENDING,
-                    ]);
+                        // 檢查租戶一致性
+                        if ($customer->tenant_id !== $campaign->tenant_id) {
+                            throw new RuntimeException('客戶與活動租戶不一致');
+                        }
 
-                    try {
                         // 如果是點數獎勵，調用PointService發放點數
                         if ($campaignReward->reward_type === CampaignReward::TYPE_POINTS) {
                             if ($campaignReward->points <= 0) {
@@ -135,16 +137,16 @@ class RewardService
                         }
 
                         return $rewardGrant->fresh();
-                    } catch (RuntimeException $e) {
-                        // PointService發放失敗，標記發放記錄為失敗
-                        $rewardGrant->update([
-                            'status' => RewardGrant::STATUS_FAILED,
-                            'failure_reason' => $e->getMessage(),
-                        ]);
+                    });
+                } catch (RuntimeException $e) {
+                    // 任何驗證或發放失敗，都標記發放記錄為失敗（此時RewardGrant已持久化，不會被事務回滾）
+                    $rewardGrant->update([
+                        'status' => RewardGrant::STATUS_FAILED,
+                        'failure_reason' => $e->getMessage(),
+                    ]);
 
-                        throw $e;
-                    }
-                });
+                    throw $e;
+                }
             });
         } catch (LockTimeoutException $e) {
             throw new RuntimeException('系統繁忙，請稍後再試', 0, $e);
