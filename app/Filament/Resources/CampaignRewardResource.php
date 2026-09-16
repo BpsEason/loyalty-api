@@ -18,8 +18,11 @@ class CampaignRewardResource extends Resource
 {
     protected static ?string $model = CampaignReward::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-gift';
-    protected static string|UnitEnum|null $navigationGroup = 'Rewards';
+    protected static string|UnitEnum|null $navigationGroup = '獎勵管理';
     protected static ?int $navigationSort = 2;
+    protected static ?string $modelLabel = '活動獎勵';
+    protected static ?string $pluralModelLabel = '活動獎勵';
+    protected static ?string $navigationLabel = '活動獎勵';
 
     /**
      * 是否將資源範圍限制在目前的租戶
@@ -38,25 +41,25 @@ class CampaignRewardResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\Select::make('campaign_id')
-                    ->label('Campaign')
+                    ->label('活動')
                     ->relationship('campaign', 'name')
                     ->required()
                     ->searchable(),
                 Forms\Components\Select::make('reward_type')
-                    ->label('Reward Type')
+                    ->label('獎勵類型')
                     ->options([
-                        CampaignReward::TYPE_POINTS => 'Points',
-                        CampaignReward::TYPE_BADGE => 'Badge',
-                        CampaignReward::TYPE_COUPON => 'Coupon',
+                        CampaignReward::TYPE_POINTS => '點數',
+                        CampaignReward::TYPE_BADGE => '徽章',
+                        CampaignReward::TYPE_COUPON => '優惠券',
                     ])
                     ->required(),
                 Forms\Components\TextInput::make('points')
-                    ->label('Points Amount')
+                    ->label('點數數量')
                     ->numeric()
                     ->default(0)
                     ->required(),
                 Forms\Components\Toggle::make('enabled')
-                    ->label('Enabled')
+                    ->label('是否啟用')
                     ->default(true)
                     ->required(),
             ]);
@@ -76,31 +79,37 @@ class CampaignRewardResource extends Resource
             })
             ->columns([
                 Tables\Columns\TextColumn::make('campaign.name')
-                    ->label('Campaign')
+                    ->label('活動')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('reward_type')
+                    ->label('獎勵類型')
                     ->badge(),
                 Tables\Columns\TextColumn::make('points')
+                    ->label('點數數量')
                     ->numeric()
                     ->sortable(),
                 Tables\Columns\IconColumn::make('enabled')
+                    ->label('是否啟用')
                     ->boolean(),
                 Tables\Columns\TextColumn::make('campaign.tenant.name')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->searchable()
                     ->visible(fn() => auth()->user()->hasRole('super_admin')),
                 Tables\Columns\TextColumn::make('created_at')
+                    ->label('建立時間')
                     ->dateTime()
                     ->sortable(),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('reward_type')
+                    ->label('獎勵類型')
                     ->options([
-                        CampaignReward::TYPE_POINTS => 'Points',
-                        CampaignReward::TYPE_BADGE => 'Badge',
-                        CampaignReward::TYPE_COUPON => 'Coupon',
+                        CampaignReward::TYPE_POINTS => '點數',
+                        CampaignReward::TYPE_BADGE => '徽章',
+                        CampaignReward::TYPE_COUPON => '優惠券',
                     ]),
-                Tables\Filters\TernaryFilter::make('enabled'),
+                Tables\Filters\TernaryFilter::make('enabled')
+                    ->label('是否啟用'),
             ])
             ->actions([
                 \Filament\Actions\EditAction::make(),

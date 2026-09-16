@@ -18,8 +18,11 @@ class CustomerResource extends Resource
 {
     protected static ?string $model = Customer::class;
     protected static BackedEnum|string|null $navigationIcon = 'heroicon-o-user-group';
-    protected static UnitEnum|string|null $navigationGroup = 'Loyalty';
+    protected static UnitEnum|string|null $navigationGroup = '會員管理';
     protected static ?int $navigationSort = 1;
+    protected static ?string $modelLabel = '客戶';
+    protected static ?string $pluralModelLabel = '客戶';
+    protected static ?string $navigationLabel = '客戶';
 
     /**
      * 是否將資源範圍限制在目前的租戶
@@ -43,19 +46,23 @@ class CustomerResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\Select::make('tenant_id')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->relationship('tenant', 'name')
                     ->required(fn() => !auth()->user()->hasRole('tenant_admin')),
                 Forms\Components\TextInput::make('name')
+                    ->label('名稱')
                     ->required()
                     ->maxLength(255),
                 Forms\Components\TextInput::make('email')
+                    ->label('電子郵件')
                     ->email()
                     ->required()
                     ->maxLength(255),
                 Forms\Components\TextInput::make('phone')
+                    ->label('電話')
                     ->maxLength(20),
                 Forms\Components\KeyValue::make('metadata')
+                    ->label('額外資訊')
                     ->default([
                         'member_since' => now()->format('Y-m-d'),
                         'tier' => 'bronze',
@@ -77,15 +84,19 @@ class CustomerResource extends Resource
             })
             ->columns([
                 Tables\Columns\TextColumn::make('name')
+                    ->label('名稱')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('email')
+                    ->label('電子郵件')
                     ->searchable(),
-                Tables\Columns\TextColumn::make('phone'),
+                Tables\Columns\TextColumn::make('phone')
+                    ->label('電話'),
                 Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->searchable()
                     ->visible(fn() => auth()->user()->hasRole('super_admin')),
                 Tables\Columns\TextColumn::make('created_at')
+                    ->label('建立時間')
                     ->dateTime()
                     ->sortable(),
             ])

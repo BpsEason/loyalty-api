@@ -18,8 +18,11 @@ class PointTransactionResource extends Resource
 {
     protected static ?string $model = PointTransaction::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-arrow-trending-up';
-    protected static string|UnitEnum|null $navigationGroup = 'Loyalty';
+    protected static string|UnitEnum|null $navigationGroup = '會員管理';
     protected static ?int $navigationSort = 3;
+    protected static ?string $modelLabel = '點數交易';
+    protected static ?string $pluralModelLabel = '點數交易';
+    protected static ?string $navigationLabel = '點數交易';
 
     /**
      * 是否將資源範圍限制在目前的租戶
@@ -43,24 +46,28 @@ class PointTransactionResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\Select::make('tenant_id')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->relationship('tenant', 'name')
                     ->required(fn() => !auth()->user()->hasRole('tenant_admin')),
                 Forms\Components\Select::make('point_account_id')
-                    ->label('Point Account')
+                    ->label('點數帳戶')
                     ->relationship('pointAccount', 'id')
                     ->required()
                     ->searchable(),
                 Forms\Components\TextInput::make('amount')
+                    ->label('金額')
                     ->required()
                     ->numeric(),
                 Forms\Components\TextInput::make('type')
+                    ->label('類型')
                     ->required()
                     ->maxLength(50),
                 Forms\Components\Textarea::make('description')
+                    ->label('描述')
                     ->maxLength(65535)
                     ->columnSpanFull(),
-                Forms\Components\KeyValue::make('metadata'),
+                Forms\Components\KeyValue::make('metadata')
+                    ->label('中繼資料'),
             ]);
     }
 
@@ -76,17 +83,20 @@ class PointTransactionResource extends Resource
             })
             ->columns([
                 Tables\Columns\TextColumn::make('pointAccount.customer.name')
-                    ->label('Customer')
+                    ->label('客戶')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('amount')
+                    ->label('金額')
                     ->numeric()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('type')
+                    ->label('類型')
                     ->badge(),
                 Tables\Columns\TextColumn::make('description')
+                    ->label('描述')
                     ->limit(50),
                 Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->searchable()
                     ->visible(fn() => auth()->user()->hasRole('super_admin')),
                 Tables\Columns\TextColumn::make('created_at')
@@ -95,11 +105,12 @@ class PointTransactionResource extends Resource
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('type')
+                    ->label('類型')
                     ->options([
-                        'earn' => 'Earn',
-                        'redeem' => 'Redeem',
-                        'expire' => 'Expire',
-                        'adjust' => 'Adjust',
+                        'earn' => '獲得',
+                        'redeem' => '兌換',
+                        'expire' => '過期',
+                        'adjust' => '調整',
                     ]),
             ])
             ->actions([

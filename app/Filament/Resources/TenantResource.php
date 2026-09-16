@@ -18,7 +18,10 @@ class TenantResource extends Resource
 {
     protected static ?string $model = Tenant::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-building-office';
-    protected static string|UnitEnum|null $navigationGroup = 'Platform';
+    protected static string|UnitEnum|null $navigationGroup = '平台管理';
+    protected static ?string $modelLabel = '租戶';
+    protected static ?string $pluralModelLabel = '租戶';
+    protected static ?string $navigationLabel = '租戶';
     protected static ?int $navigationSort = 1;
 
     /**
@@ -43,16 +46,20 @@ class TenantResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\TextInput::make('name')
+                    ->label('名稱')
                     ->required()
                     ->maxLength(255),
                 Forms\Components\TextInput::make('domain')
+                    ->label('網域')
                     ->required()
                     ->maxLength(255)
                     ->unique(ignoreRecord: true),
                 Forms\Components\Toggle::make('is_active')
+                    ->label('是否啟用')
                     ->required()
                     ->default(true),
                 Forms\Components\KeyValue::make('settings')
+                    ->label('設定')
                     ->default([
                         'currency' => 'TWD',
                         'timezone' => 'Asia/Taipei',
@@ -65,16 +72,21 @@ class TenantResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')
+                    ->label('名稱')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('domain')
+                    ->label('網域')
                     ->searchable(),
                 Tables\Columns\IconColumn::make('is_active')
+                    ->label('是否啟用')
                     ->boolean(),
                 Tables\Columns\TextColumn::make('created_at')
+                    ->label('建立時間')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('updated_at')
+                    ->label('更新時間')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),

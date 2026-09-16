@@ -43,7 +43,7 @@ class RoleResource extends Resource
 
     public static function getNavigationGroup(): ?string
     {
-        return 'Platform';
+        return '平台管理';
     }
 
     public static function getNavigationSort(): ?int

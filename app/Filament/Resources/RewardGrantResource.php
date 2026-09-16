@@ -18,8 +18,11 @@ class RewardGrantResource extends Resource
 {
     protected static ?string $model = RewardGrant::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-ticket';
-    protected static string|UnitEnum|null $navigationGroup = 'Rewards';
+    protected static string|UnitEnum|null $navigationGroup = '獎勵管理';
     protected static ?int $navigationSort = 3;
+    protected static ?string $modelLabel = '獎勵發放';
+    protected static ?string $pluralModelLabel = '獎勵發放';
+    protected static ?string $navigationLabel = '獎勵發放';
 
     /**
      * 是否將資源範圍限制在目前的租戶
@@ -43,42 +46,43 @@ class RewardGrantResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\Select::make('tenant_id')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->relationship('tenant', 'name')
                     ->required(fn() => !auth()->user()->hasRole('tenant_admin'))
                     ->disabled(fn($record) => $record !== null),
                 Forms\Components\Select::make('campaign_id')
-                    ->label('Campaign')
+                    ->label('活動')
                     ->relationship('campaign', 'name')
                     ->required()
                     ->disabled(fn($record) => $record !== null),
                 Forms\Components\Select::make('campaign_reward_id')
-                    ->label('Reward')
+                    ->label('獎勵')
                     ->relationship('campaignReward', 'id')
                     ->required()
                     ->disabled(fn($record) => $record !== null),
                 Forms\Components\Select::make('customer_id')
-                    ->label('Customer')
+                    ->label('客戶')
                     ->relationship('customer', 'name')
                     ->required()
                     ->disabled(fn($record) => $record !== null),
                 Forms\Components\Select::make('status')
+                    ->label('狀態')
                     ->options([
-                        RewardGrant::STATUS_PENDING => 'Pending',
-                        RewardGrant::STATUS_GRANTED => 'Granted',
-                        RewardGrant::STATUS_FAILED => 'Failed',
+                        RewardGrant::STATUS_PENDING => '待處理',
+                        RewardGrant::STATUS_GRANTED => '已發放',
+                        RewardGrant::STATUS_FAILED => '失敗',
                     ])
                     ->required()
                     ->disabled(),
                 Forms\Components\DateTimePicker::make('granted_at')
-                    ->label('Granted At')
+                    ->label('發放時間')
                     ->disabled(),
                 Forms\Components\Textarea::make('failure_reason')
-                    ->label('Failure Reason')
+                    ->label('失敗原因')
                     ->columnSpanFull()
                     ->disabled(),
                 Forms\Components\Select::make('point_transaction_id')
-                    ->label('Point Transaction')
+                    ->label('點數交易')
                     ->relationship('pointTransaction', 'id')
                     ->disabled(),
             ]);
@@ -96,15 +100,16 @@ class RewardGrantResource extends Resource
             })
             ->columns([
                 Tables\Columns\TextColumn::make('campaign.name')
-                    ->label('Campaign')
+                    ->label('活動')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('customer.name')
-                    ->label('Customer')
+                    ->label('客戶')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('campaignReward.reward_type')
-                    ->label('Reward Type')
+                    ->label('獎勵類型')
                     ->badge(),
                 Tables\Columns\TextColumn::make('status')
+                    ->label('狀態')
                     ->badge()
                     ->colors([
                         'warning' => RewardGrant::STATUS_PENDING,
@@ -112,26 +117,29 @@ class RewardGrantResource extends Resource
                         'danger' => RewardGrant::STATUS_FAILED,
                     ]),
                 Tables\Columns\TextColumn::make('granted_at')
+                    ->label('發放時間')
                     ->dateTime()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('pointTransaction.id')
-                    ->label('Transaction ID')
+                    ->label('交易序號')
                     ->searchable()
                     ->toggleable(),
                 Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->searchable()
                     ->visible(fn() => auth()->user()->hasRole('super_admin')),
                 Tables\Columns\TextColumn::make('created_at')
+                    ->label('建立時間')
                     ->dateTime()
                     ->sortable(),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
+                    ->label('狀態')
                     ->options([
-                        RewardGrant::STATUS_PENDING => 'Pending',
-                        RewardGrant::STATUS_GRANTED => 'Granted',
-                        RewardGrant::STATUS_FAILED => 'Failed',
+                        RewardGrant::STATUS_PENDING => '待處理',
+                        RewardGrant::STATUS_GRANTED => '已發放',
+                        RewardGrant::STATUS_FAILED => '失敗',
                     ]),
             ])
             ->actions([

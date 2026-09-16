@@ -18,8 +18,11 @@ class PointAccountResource extends Resource
 {
     protected static ?string $model = PointAccount::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-banknotes';
-    protected static string|UnitEnum|null $navigationGroup = 'Loyalty';
+    protected static string|UnitEnum|null $navigationGroup = '會員管理';
     protected static ?int $navigationSort = 2;
+    protected static ?string $modelLabel = '點數帳戶';
+    protected static ?string $pluralModelLabel = '點數帳戶';
+    protected static ?string $navigationLabel = '點數帳戶';
 
     /**
      * 是否將資源範圍限制在目前的租戶
@@ -43,11 +46,11 @@ class PointAccountResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\Select::make('tenant_id')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->relationship('tenant', 'name')
                     ->required(fn() => !auth()->user()->hasRole('tenant_admin')),
                 Forms\Components\Select::make('customer_id')
-                    ->label('Customer')
+                    ->label('客戶')
                     ->relationship('customer', 'name')
                     ->required()
                     ->searchable(),
@@ -78,19 +81,22 @@ class PointAccountResource extends Resource
             })
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')
-                    ->label('Customer')
+                    ->label('客戶')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('balance')
+                    ->label('餘額')
                     ->numeric()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('total_earned')
+                    ->label('累積獲得')
                     ->numeric()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('total_redeemed')
+                    ->label('累積兌換')
                     ->numeric()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->searchable()
                     ->visible(fn() => auth()->user()->hasRole('super_admin')),
             ])

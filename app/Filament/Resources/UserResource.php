@@ -19,7 +19,10 @@ class UserResource extends Resource
 {
     protected static ?string $model = User::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-users';
-    protected static string|UnitEnum|null $navigationGroup = 'Platform';
+    protected static string|UnitEnum|null $navigationGroup = '平台管理';
+    protected static ?string $modelLabel = '使用者';
+    protected static ?string $pluralModelLabel = '使用者';
+    protected static ?string $navigationLabel = '使用者';
     protected static ?int $navigationSort = 2;
 
     /**
@@ -83,7 +86,7 @@ class UserResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\Select::make('tenant_id')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->relationship('tenant', 'name', function ($query) {
                         $user = auth()->user();
 
@@ -111,17 +114,19 @@ class UserResource extends Resource
                         }
                     }),
                 Forms\Components\TextInput::make('name')
+                    ->label('名稱')
                     ->required()
                     ->maxLength(255),
                 Forms\Components\TextInput::make('email')
+                    ->label('電子郵件')
                     ->email()
                     ->required()
                     ->maxLength(255)
                     ->unique(ignoreRecord: true),
                 Forms\Components\TextInput::make('password')
                     ->password()
-                    ->label('Password')
-                    ->hint('Edit mode: leave blank to keep current password')
+                    ->label('密碼')
+                    ->hint('編輯模式：留空以保留目前的密碼')
                     ->dehydrated(fn($state) => filled($state))
                     ->afterStateHydrated(function ($component, $state) {
                         // 永遠不把現有密碼載入到表單，確保安全性
@@ -181,13 +186,16 @@ class UserResource extends Resource
             })
             ->columns([
                 Tables\Columns\TextColumn::make('name')
+                    ->label('名稱')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('email')
+                    ->label('電子郵件')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('roles.name')
+                    ->label('角色')
                     ->badge()
                     ->getStateUsing(function ($record) {
                         // 🔑 關鍵修正：每次查詢前先unload roles關係，確保使用正確的team_id重新查詢
@@ -217,6 +225,12 @@ class UserResource extends Resource
                         return $roles;
                     }),
                 Tables\Columns\TextColumn::make('created_at')
+                    ->label('建立時間')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('updated_at')
+                    ->label('更新時間')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),

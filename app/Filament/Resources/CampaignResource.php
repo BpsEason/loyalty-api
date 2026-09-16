@@ -17,8 +17,11 @@ class CampaignResource extends Resource
 {
     protected static ?string $model = Campaign::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-megaphone';
-    protected static string|UnitEnum|null $navigationGroup = 'Rewards';
+    protected static string|UnitEnum|null $navigationGroup = '獎勵活動';
     protected static ?int $navigationSort = 1;
+    protected static ?string $modelLabel = '活動';
+    protected static ?string $pluralModelLabel = '活動';
+    protected static ?string $navigationLabel = '活動';
 
     /**
      * 是否將資源範圍限制在目前的租戶
@@ -42,15 +45,18 @@ class CampaignResource extends Resource
         return $schema
             ->schema([
                 Forms\Components\Select::make('tenant_id')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->relationship('tenant', 'name')
                     ->required(fn() => !auth()->user()->hasRole('tenant_admin')),
                 Forms\Components\TextInput::make('name')
+                    ->label('活動名稱')
                     ->required()
                     ->maxLength(255),
                 Forms\Components\Textarea::make('description')
+                    ->label('活動描述')
                     ->columnSpanFull(),
                 Forms\Components\Select::make('status')
+                    ->label('狀態')
                     ->options([
                         Campaign::STATUS_DRAFT => '草稿',
                         Campaign::STATUS_ACTIVE => '啟用',
@@ -80,8 +86,10 @@ class CampaignResource extends Resource
             })
             ->columns([
                 Tables\Columns\TextColumn::make('name')
+                    ->label('活動名稱')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('status')
+                    ->label('狀態')
                     ->badge()
                     ->colors([
                         'gray' => Campaign::STATUS_DRAFT,
@@ -90,21 +98,25 @@ class CampaignResource extends Resource
                         'info' => Campaign::STATUS_COMPLETED,
                     ]),
                 Tables\Columns\TextColumn::make('starts_at')
+                    ->label('開始時間')
                     ->dateTime()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('ends_at')
+                    ->label('結束時間')
                     ->dateTime()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('Tenant')
+                    ->label('租戶')
                     ->searchable()
                     ->visible(fn() => auth()->user()->hasRole('super_admin')),
                 Tables\Columns\TextColumn::make('created_at')
+                    ->label('建立時間')
                     ->dateTime()
                     ->sortable(),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
+                    ->label('狀態')
                     ->options([
                         Campaign::STATUS_DRAFT => '草稿',
                         Campaign::STATUS_ACTIVE => '啟用',
