@@ -21,7 +21,7 @@ class TenantMiddleware
     {
         $user = auth()->user();
 
-        // 支援從 X-Tenant-ID 標頭解析租戶（供外部系統使用）
+        // 1. 若 Header 帶有 X-Tenant-ID
         if ($request->hasHeader('X-Tenant-ID')) {
             $tenantId = $request->header('X-Tenant-ID');
 
@@ -31,50 +31,49 @@ class TenantMiddleware
                 $tenant = null;
             }
 
-            if ($tenant) {
-                // 驗證使用者是否有權存取此租戶
-                if ($user && $user->tenant_id !== $tenant->id) {
+            if (!$tenant) {
+                return ApiResponse::error(
+                    message: 'Invalid tenant identifier.',
+                    status: 403
+                );
+            }
+
+            // 若有登入使用者，驗證使用者是否有權存取該 Tenant
+            if ($user && (int)$user->tenant_id !== (int)$tenant->id) {
+                if (!(method_exists($user, 'hasRole') && $user->hasRole('super_admin'))) {
                     return ApiResponse::error(
                         message: 'User not authorized to access this tenant.',
                         status: 403
                     );
                 }
-
-                $this->tenantContext->setTenant($tenant);
-
-                return $next($request);
             }
 
-            return ApiResponse::error(
-                message: 'Invalid tenant identifier.',
-                status: 403
-            );
+            $this->tenantContext->setTenant($tenant);
+            return $next($request);
         }
 
+        // 2. 若無 Header，從 User 綁定的 Tenant 解析
         if ($user) {
-            // Super admin can bypass tenant check
-            if (method_exists($user, 'hasRole') && $user->hasRole('super_admin')) {
-                return $next($request);
-            }
-
             $tenant = $this->tenantResolver->resolveForUser($user);
 
-            if (!$tenant) {
+            if (!$tenant && !(method_exists($user, 'hasRole') && $user->hasRole('super_admin'))) {
                 return ApiResponse::error(
                     message: 'No tenant associated with this user.',
                     status: 403
                 );
             }
 
-            $this->tenantContext->setTenant($tenant);
-        } else {
-            // 既無認證使用者也無租戶標頭
-            return ApiResponse::error(
-                message: 'Tenant context required.',
-                status: 403
-            );
+            if ($tenant) {
+                $this->tenantContext->setTenant($tenant);
+            }
+
+            return $next($request);
         }
 
-        return $next($request);
+        // 3. 既無 Header 也無 User
+        return ApiResponse::error(
+            message: 'Tenant context required.',
+            status: 403
+        );
     }
 }

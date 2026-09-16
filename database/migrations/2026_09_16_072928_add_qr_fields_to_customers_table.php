@@ -12,8 +12,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('customers', function (Blueprint $table) {
-            $table->string('member_code')->nullable()->unique()->comment('會員編號');
-            $table->string('qr_token')->nullable()->unique()->comment('QR掃描用的不透明令牌');
+            $table->string('member_code')->nullable()->comment('會員編號');
+            $table->string('qr_token')->nullable()->comment('QR掃描用的不透明令牌');
             // 在租戶內確保member_code和qr_token的唯一性
             $table->unique(['tenant_id', 'member_code']);
             $table->unique(['tenant_id', 'qr_token']);

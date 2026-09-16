@@ -7,6 +7,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.2",
+        "bacon/bacon-qr-code": "^3.1",
         "bezhansalleh/filament-shield": "4.3.1",
         "darkaonline/l5-swagger": "^11.1",
         "filament/filament": "^5.8",
@@ -17,6 +18,7 @@
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
+        "khanamiryan/qrcode-detector-decoder": "^2.0",
         "laravel/pail": "^1.2.2",
         "laravel/pint": "^1.24",
         "laravel/sail": "^1.41",

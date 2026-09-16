@@ -7,8 +7,8 @@ use App\Models\PointAccount;
 use App\Models\PointTransaction;
 use App\Models\Tenant;
 use App\Models\User;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
@@ -16,8 +16,6 @@ use Spatie\Permission\PermissionRegistrar;
 
 class DatabaseSeeder extends Seeder
 {
-    use WithoutModelEvents;
-
     /**
      * Seed the application's database.
      */
@@ -255,14 +253,14 @@ class DatabaseSeeder extends Seeder
              * 4. 建立 Demo Customers
              * ========================================================
              *
-             * Customer Model 的 creating event 已經負責：
+             * Customer Model 的 creating event 負責自動產生：
              *
-             * - 自動產生 member_code
-             * - 自動產生 qr_token
+             * - member_code
+             * - qr_token
              *
-             * 因此 Seeder 不自行產生這兩個欄位。
-             *
-             * 每個 Tenant 都建立 5 個固定 Demo Customer。
+             * 注意：
+             * DatabaseSeeder 不再使用 WithoutModelEvents，
+             * 因此 Customer::creating() 會正常執行。
              */
             $customers = $this->seedCustomers(
                 tenant: $tenant,
@@ -353,7 +351,7 @@ class DatabaseSeeder extends Seeder
         Tenant $tenant,
         string $tenantName,
         string $tenantLetter
-    ) {
+    ): Collection {
         $customerSeeds = [
             [
                 'name' => "Customer {$tenantName}1",

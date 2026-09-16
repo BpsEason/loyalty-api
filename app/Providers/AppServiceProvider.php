@@ -16,6 +16,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        // 註冊租戶相關上下文為單例，確保整個請求生命週期中只有一個實例
+        $this->app->singleton(\App\Support\Tenancy\TenantContext::class);
+        $this->app->singleton(\App\Support\Tenancy\TenantResolver::class);
+
         $this->app->singleton(\App\Services\Reward\RewardService::class, function ($app) {
             return new \App\Services\Reward\RewardService(
                 $app->make(\App\Services\Point\PointService::class),

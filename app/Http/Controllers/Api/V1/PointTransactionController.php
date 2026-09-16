@@ -49,8 +49,15 @@ class PointTransactionController extends Controller
             ),
         ]
     )]
-    public function index(Request $request, Customer $customer): JsonResponse
+    public function index(Request $request, Customer $customer, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
     {
+        // 確保客戶屬於當前租戶
+        $tenant = $tenantContext->getTenant();
+        // 只有當租戶上下文存在時才驗證，否則依賴模型層的全域範圍
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
         $transactions = $customer->pointTransactions()->latest()->paginate();
 
         return ApiResponse::success(
@@ -92,8 +99,15 @@ class PointTransactionController extends Controller
             ),
         ]
     )]
-    public function show(Request $request, Customer $customer, PointTransaction $pointTransaction): JsonResponse
+    public function show(Request $request, Customer $customer, PointTransaction $pointTransaction, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
     {
+        // 確保客戶屬於當前租戶
+        $tenant = $tenantContext->getTenant();
+        // 只有當租戶上下文存在時才驗證，否則依賴模型層的全域範圍
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
         // 確保點數交易屬於該 Customer，避免跨權限讀取漏洞
         if ($pointTransaction->customer_id !== $customer->id) {
             return ApiResponse::error('Point transaction not found', null, [], 404);
@@ -162,14 +176,22 @@ class PointTransactionController extends Controller
             ),
         ]
     )]
-    public function store(PointTransactionStoreRequest $request, Customer $customer, PointService $pointService): JsonResponse
+    public function store(PointTransactionStoreRequest $request, Customer $customer, PointService $pointService, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
     {
+        // 確保客戶屬於當前租戶
+        $tenant = $tenantContext->getTenant();
+        // 只有當租戶上下文存在時才驗證，否則依賴模型層的全域範圍
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
         $validated = $request->validated();
 
         // 冪等性檢查：如果有傳入 Idempotency-Key 標頭，檢查是否已處理過此請求
         $idempotencyKey = $request->header('Idempotency-Key');
-        if ($idempotencyKey) {
-            $cachedTransactionId = cache()->get("idempotency:{$idempotencyKey}");
+        if ($idempotencyKey && $tenant) {
+            $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
+            $cachedTransactionId = cache()->get($cacheKey);
             if ($cachedTransactionId) {
                 $existingTransaction = PointTransaction::find($cachedTransactionId);
                 if ($existingTransaction) {
@@ -180,7 +202,7 @@ class PointTransactionController extends Controller
                     );
                 }
                 // 快取存在但交易不存在，清除過期快取
-                cache()->forget("idempotency:{$idempotencyKey}");
+                cache()->forget($cacheKey);
             }
         }
 
@@ -203,8 +225,9 @@ class PointTransactionController extends Controller
             );
 
             // 儲存冪等性快取
-            if ($idempotencyKey) {
-                cache()->put("idempotency:{$idempotencyKey}", $transaction->id, now()->addHours(24));
+            if ($idempotencyKey && $tenant) {
+                $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
+                cache()->put($cacheKey, $transaction->id, now()->addHours(24));
             }
 
             return ApiResponse::success(
@@ -265,18 +288,26 @@ class PointTransactionController extends Controller
             ),
         ]
     )]
-    public function redeem(Request $request, Customer $customer, PointService $pointService): JsonResponse
+    public function redeem(Request $request, Customer $customer, PointService $pointService, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
     {
+        // 確保客戶屬於當前租戶
+        $tenant = $tenantContext->getTenant();
+        // 只有當租戶上下文存在時才驗證，否則依賴模型層的全域範圍
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
         $validated = $request->validate([
             'amount' => 'required|integer|min:1',
             'description' => 'nullable|string',
             'reference' => 'nullable|string',
         ]);
 
-        // 冪等性檢查
+        // 冪等性檢查：如果有傳入 Idempotency-Key 標頭，檢查是否已處理過此請求
         $idempotencyKey = $request->header('Idempotency-Key');
-        if ($idempotencyKey) {
-            $cachedTransactionId = cache()->get("idempotency:{$idempotencyKey}");
+        if ($idempotencyKey && $tenant) {
+            $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
+            $cachedTransactionId = cache()->get($cacheKey);
             if ($cachedTransactionId) {
                 $existingTransaction = PointTransaction::find($cachedTransactionId);
                 if ($existingTransaction) {
@@ -286,7 +317,8 @@ class PointTransactionController extends Controller
                         status: 200
                     );
                 }
-                cache()->forget("idempotency:{$idempotencyKey}");
+                // 快取存在但交易不存在，清除過期快取
+                cache()->forget($cacheKey);
             }
         }
 
@@ -300,8 +332,9 @@ class PointTransactionController extends Controller
             );
 
             // 儲存冪等性快取
-            if ($idempotencyKey) {
-                cache()->put("idempotency:{$idempotencyKey}", $transaction->id, now()->addHours(24));
+            if ($idempotencyKey && $tenant) {
+                $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
+                cache()->put($cacheKey, $transaction->id, now()->addHours(24));
             }
 
             return ApiResponse::success(

@@ -48,7 +48,9 @@ class Customer extends Model
     protected static function generateMemberCode($tenantId): string
     {
         $prefix = 'M';
-        $lastCustomer = static::where('tenant_id', $tenantId)
+        // 使用withoutGlobalScope移除租戶全域範圍，才能正確查詢同一租戶下的所有客戶
+        $lastCustomer = static::withoutGlobalScope('tenant')
+            ->where('tenant_id', $tenantId)
             ->whereNotNull('member_code')
             ->latest('id')
             ->first();

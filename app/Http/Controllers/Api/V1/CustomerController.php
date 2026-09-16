@@ -8,6 +8,10 @@ use App\Http\Requests\Api\V1\Customer\CustomerUpdateRequest;
 use App\Http\Resources\Api\V1\Customer\CustomerResource;
 use App\Models\Customer;
 use App\Support\Api\ApiResponse;
+use BaconQrCode\Renderer\ImageRenderer;
+use BaconQrCode\Renderer\RendererStyle\RendererStyle;
+use BaconQrCode\Writer;
+use BaconQrCode\Renderer\Image\SvgImageBackEnd;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use OpenApi\Attributes as OA;
@@ -152,7 +156,7 @@ class CustomerController extends Controller
 
     #[OA\Get(
         path: '/customers/{customer}/qr-code',
-        summary: 'Get customer QR code data',
+        summary: 'Get customer QR code image as base64 data URI',
         tags: ['Customers'],
         security: [['bearerAuth' => []]],
         parameters: [
@@ -161,17 +165,16 @@ class CustomerController extends Controller
         responses: [
             new OA\Response(
                 response: 200,
-                description: 'QR code data retrieved successfully',
+                description: 'QR code retrieved successfully',
                 content: new OA\JsonContent(
                     properties: [
                         new OA\Property(property: 'success', type: 'boolean', example: true),
-                        new OA\Property(property: 'message', type: 'string', example: 'QR code data retrieved successfully'),
+                        new OA\Property(property: 'message', type: 'string', example: 'QR code retrieved successfully'),
                         new OA\Property(
                             property: 'data',
                             properties: [
                                 new OA\Property(property: 'member_code', type: 'string', example: 'M001001'),
-                                new OA\Property(property: 'qr_token', type: 'string', example: 'abc123xyz...'),
-                                new OA\Property(property: 'scan_url', type: 'string', example: 'https://api.example.com/scan?token=abc123'),
+                                new OA\Property(property: 'qr_code', type: 'string', example: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmci...'),
                             ]
                         ),
                     ]
@@ -179,15 +182,34 @@ class CustomerController extends Controller
             ),
         ]
     )]
-    public function getQrCode(Customer $customer): JsonResponse
+    public function getQrCode(Customer $customer, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
     {
+        // 確保客戶屬於當前租戶
+        $tenant = $tenantContext->getTenant();
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
+        // 建立QR Code渲染器 - 使用SvgImageBackEnd (BaconQRCode 3.x僅支援SVG/Imagick/EPS)
+        $renderer = new ImageRenderer(
+            new RendererStyle(400),
+            new SvgImageBackEnd()
+        );
+        $writer = new Writer($renderer);
+
+        // 使用customer的qr_token作為QR Code內容
+        $qrCodeImage = $writer->writeString($customer->qr_token);
+
+        // 轉換為base64 data URI (SVG格式)
+        $base64Image = base64_encode($qrCodeImage);
+        $dataUri = 'data:image/svg+xml;base64,' . $base64Image;
+
         return ApiResponse::success(
             data: [
                 'member_code' => $customer->member_code,
-                'qr_token' => $customer->qr_token,
-                'scan_url' => url("/api/v1/customers/identify?token={$customer->qr_token}"),
+                'qr_code' => $dataUri,
             ],
-            message: 'QR code data retrieved successfully'
+            message: 'QR code retrieved successfully'
         );
     }
 
@@ -229,14 +251,19 @@ class CustomerController extends Controller
             ),
         ]
     )]
-    public function identifyByQrToken(Request $request): JsonResponse
+    public function identifyByQrToken(Request $request, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
     {
         $request->validate([
             'qr_token' => 'required|string',
         ]);
 
+        $tenant = $tenantContext->getTenant();
+        if (!$tenant) {
+            return ApiResponse::error('Tenant context required', null, [], 403);
+        }
+
         $customer = Customer::where('qr_token', $request->qr_token)
-            ->where('tenant_id', tenant()->id) // 確保只能識別當前租戶的客戶
+            ->where('tenant_id', $tenant->id) // 確保只能識別當前租戶的客戶
             ->first();
 
         if (!$customer) {
