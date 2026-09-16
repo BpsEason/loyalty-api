@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\HandlesTenantScoping;
 use App\Models\User;
 use App\Filament\Resources\UserResource\Pages;
 use Filament\Forms;
@@ -17,6 +18,8 @@ use BackedEnum;
 
 class UserResource extends Resource
 {
+    use HandlesTenantScoping;
+
     protected static ?string $model = User::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-users';
     protected static string|UnitEnum|null $navigationGroup = '平台管理';
@@ -26,84 +29,33 @@ class UserResource extends Resource
     protected static ?int $navigationSort = 2;
 
     /**
-     * 是否將資源範圍限制在目前的租戶
-     * Super Admin（tenant_id為null）可以存取所有租戶的資料
-     */
-    public static function isScopedToTenant(): bool
-    {
-        $user = auth()->user();
-
-        // 如果是super_admin，完全不限制租戶範圍，可以看到所有資料
-        if ($user && is_null($user->tenant_id)) {
-            return false;
-        }
-
-        // 一般使用者維持租戶隔離
-        return true;
-    }
-
-    /**
-     * 覆蓋Filament的全域範圍查詢，確保Super Admin能看到所有租戶的使用者
+     * 處理Eloquent查詢，僅處理必要的eager loading
+     * 租戶隔離由Filament原生機制和Model層全域範圍處理
      */
     public static function getEloquentQuery(): Builder
     {
+        $query = parent::getEloquentQuery();
+
+        // 處理必要的eager loading
+        $query = static::applyTenantScoping($query, ['tenant']);
+
+        // 記錄Super Admin的查詢，保留原有的日誌
         $user = auth()->user();
-        $panel = filament()->getCurrentOrDefaultPanel();
-
-        // Super Admin 永遠移除Filament的租戶全域範圍，解決404問題
-        if ($user && is_null($user->tenant_id)) {
-            $query = parent::getEloquentQuery();
-
-            // 🔑 手動移除已經註冊的全域範圍，這是解決404的關鍵
-            if ($panel?->hasTenancy()) {
-                $query->withoutGlobalScope($panel->getTenancyScopeName());
-            }
-
-            // 手動 eager load tenant，同時移除tenant的全域範圍
-            $query->with(['tenant' => function ($query) use ($panel) {
-                if ($panel?->hasTenancy()) {
-                    $query->withoutGlobalScope($panel->getTenancyScopeName());
-                }
-            }]);
-
-            // 🚫 不eager load roles，讓getStateUsing()中的unsetRelation能正確重新查詢每個使用者的角色
-            // 避免Filament自動用當前team_id批量載入所有roles
-
+        if ($user && $user->isSuperAdmin()) {
             logger()->debug('Super Admin User Query', [
                 'sql' => $query->toSql(),
                 'bindings' => $query->getBindings(),
             ]);
-
-            return $query;
         }
 
-        // 一般使用者使用父類別的查詢，保持租戶隔離
-        return parent::getEloquentQuery();
+        return $query;
     }
 
     public static function form(Schema $schema): Schema
     {
         return $schema
             ->schema([
-                Forms\Components\Select::make('tenant_id')
-                    ->label('租戶')
-                    ->relationship('tenant', 'name', function ($query) {
-                        $user = auth()->user();
-
-                        // Super Admin 可以看到所有租戶
-                        if ($user && is_null($user->tenant_id)) {
-                            // 移除 Tenant Model 的 Filament 全域範圍，才能看到所有租戶
-                            $panel = filament()->getCurrentOrDefaultPanel();
-                            if ($panel?->hasTenancy()) {
-                                $query->withoutGlobalScope($panel->getTenancyScopeName());
-                            }
-                        } else {
-                            // 一般使用者只能看到自己的租戶
-                            $query->where('id', $user->tenant_id);
-                        }
-
-                        return $query;
-                    })
+                \App\Forms\Components\TenantSelect::make()
                     ->required(fn($context) => $context !== 'create' || request()->user()->hasRole('tenant_admin'))
                     ->reactive()
                     ->afterStateUpdated(function ($state, $component) {

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\HandlesTenantScoping;
 use App\Models\RewardGrant;
 use App\Filament\Resources\RewardGrantResource\Pages;
 use Filament\Forms;
@@ -16,6 +17,8 @@ use BackedEnum;
 
 class RewardGrantResource extends Resource
 {
+    use HandlesTenantScoping;
+
     protected static ?string $model = RewardGrant::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-ticket';
     protected static string|UnitEnum|null $navigationGroup = '獎勵管理';
@@ -25,44 +28,81 @@ class RewardGrantResource extends Resource
     protected static ?string $navigationLabel = '獎勵發放';
 
     /**
-     * 是否將資源範圍限制在目前的租戶
-     * Super Admin（tenant_id為null）可以存取所有租戶的資料
+     * 處理Eloquent查詢，僅處理必要的eager loading
+     * 租戶隔離由Filament原生機制和Model層全域範圍處理
      */
-    public static function isScopedToTenant(): bool
+    public static function getEloquentQuery(): Builder
     {
-        $user = auth()->user();
+        $query = parent::getEloquentQuery();
 
-        // 如果是super_admin，不限制租戶範圍，可以看到所有資料
-        if ($user && is_null($user->tenant_id)) {
-            return false;
-        }
+        // 僅處理eager loading，租戶範圍由底層機制處理
+        $query = static::applyTenantScoping($query, [
+            'tenant',
+            'campaign',
+            'campaignReward',
+            'customer',
+            'pointTransaction'
+        ]);
 
-        // 一般使用者維持租戶隔離
-        return true;
+        return $query;
     }
 
     public static function form(Schema $schema): Schema
     {
         return $schema
             ->schema([
-                Forms\Components\Select::make('tenant_id')
-                    ->label('租戶')
-                    ->relationship('tenant', 'name')
-                    ->required(fn() => !auth()->user()->hasRole('tenant_admin'))
-                    ->disabled(fn($record) => $record !== null),
+                \App\Forms\Components\TenantSelect::make(),
                 Forms\Components\Select::make('campaign_id')
                     ->label('活動')
-                    ->relationship('campaign', 'name')
+                    ->relationship('campaign', 'name', function ($query, $get) {
+                        $user = auth()->user();
+                        $panel = filament()->getCurrentOrDefaultPanel();
+                        $tenantId = $get('tenant_id');
+
+                        if ($user && $user->isSuperAdmin()) {
+                            if ($panel?->hasTenancy()) {
+                                $query->withoutGlobalScope($panel->getTenancyScopeName());
+                            }
+                            if ($tenantId) {
+                                $query->where('tenant_id', $tenantId);
+                            }
+                        }
+
+                        return $query;
+                    })
                     ->required()
-                    ->disabled(fn($record) => $record !== null),
+                    ->disabled(fn($record) => $record !== null)
+                    ->reactive(),
                 Forms\Components\Select::make('campaign_reward_id')
                     ->label('獎勵')
-                    ->relationship('campaignReward', 'id')
+                    ->relationship('campaignReward', 'id', function ($query, $get) {
+                        $campaignId = $get('campaign_id');
+                        if ($campaignId) {
+                            $query->where('campaign_id', $campaignId);
+                        }
+                        return $query;
+                    })
+                    ->getOptionLabelFromRecordUsing(fn($record) => "{$record->id} - {$record->reward_type}")
                     ->required()
                     ->disabled(fn($record) => $record !== null),
                 Forms\Components\Select::make('customer_id')
                     ->label('客戶')
-                    ->relationship('customer', 'name')
+                    ->relationship('customer', 'name', function ($query, $get) {
+                        $user = auth()->user();
+                        $panel = filament()->getCurrentOrDefaultPanel();
+                        $tenantId = $get('tenant_id');
+
+                        if ($user && $user->isSuperAdmin()) {
+                            if ($panel?->hasTenancy()) {
+                                $query->withoutGlobalScope($panel->getTenancyScopeName());
+                            }
+                            if ($tenantId) {
+                                $query->where('tenant_id', $tenantId);
+                            }
+                        }
+
+                        return $query;
+                    })
                     ->required()
                     ->disabled(fn($record) => $record !== null),
                 Forms\Components\Select::make('status')
@@ -83,7 +123,23 @@ class RewardGrantResource extends Resource
                     ->disabled(),
                 Forms\Components\Select::make('point_transaction_id')
                     ->label('點數交易')
-                    ->relationship('pointTransaction', 'id')
+                    ->relationship('pointTransaction', 'id', function ($query, $get) {
+                        $user = auth()->user();
+                        $panel = filament()->getCurrentOrDefaultPanel();
+                        $tenantId = $get('tenant_id');
+
+                        if ($user && $user->isSuperAdmin()) {
+                            if ($panel?->hasTenancy()) {
+                                $query->withoutGlobalScope($panel->getTenancyScopeName());
+                            }
+                            if ($tenantId) {
+                                $query->where('tenant_id', $tenantId);
+                            }
+                        }
+
+                        return $query;
+                    })
+                    ->getOptionLabelFromRecordUsing(fn($record) => "交易 #{$record->id} - {$record->amount}點")
                     ->disabled(),
             ]);
     }
@@ -91,13 +147,7 @@ class RewardGrantResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->query(function () {
-                $user = auth()->user();
-                if ($user->hasRole('super_admin')) {
-                    return RewardGrant::with(['tenant', 'campaign', 'campaignReward', 'customer', 'pointTransaction']);
-                }
-                return RewardGrant::where('tenant_id', $user->tenant_id)->with(['tenant', 'campaign', 'campaignReward', 'customer', 'pointTransaction']);
-            })
+            ->query(static::getEloquentQuery())
             ->columns([
                 Tables\Columns\TextColumn::make('campaign.name')
                     ->label('活動')
@@ -111,11 +161,12 @@ class RewardGrantResource extends Resource
                 Tables\Columns\TextColumn::make('status')
                     ->label('狀態')
                     ->badge()
-                    ->colors([
-                        'warning' => RewardGrant::STATUS_PENDING,
-                        'success' => RewardGrant::STATUS_GRANTED,
-                        'danger' => RewardGrant::STATUS_FAILED,
-                    ]),
+                    ->color(fn(string $state): string => match ($state) {
+                        RewardGrant::STATUS_PENDING => 'warning',
+                        RewardGrant::STATUS_GRANTED => 'success',
+                        RewardGrant::STATUS_FAILED => 'danger',
+                        default => 'gray',
+                    }),
                 Tables\Columns\TextColumn::make('granted_at')
                     ->label('發放時間')
                     ->dateTime()
@@ -144,13 +195,8 @@ class RewardGrantResource extends Resource
             ])
             ->actions([
                 \Filament\Actions\ViewAction::make(),
-                \Filament\Actions\EditAction::make(),
             ])
-            ->bulkActions([
-                \Filament\Actions\BulkActionGroup::make([
-                    \Filament\Actions\DeleteBulkAction::make(),
-                ]),
-            ]);
+            ->bulkActions([]);
     }
 
     public static function getRelations(): array
@@ -164,8 +210,6 @@ class RewardGrantResource extends Resource
     {
         return [
             'index' => Pages\ListRewardGrants::route('/'),
-            'create' => Pages\CreateRewardGrant::route('/create'),
-            'edit' => Pages\EditRewardGrant::route('/{record}/edit'),
             'view' => Pages\ViewRewardGrant::route('/{record}'),
         ];
     }
@@ -183,19 +227,13 @@ class RewardGrantResource extends Resource
 
     public static function canEdit(Model $record): bool
     {
-        $user = auth()->user();
-        if ($user->hasRole('super_admin')) {
-            return true;
-        }
-        return $user->hasRole('tenant_admin') && $record->tenant_id === $user->tenant_id;
+        // RewardGrant是系統自動產生的記錄，禁止編輯
+        return false;
     }
 
     public static function canDelete(Model $record): bool
     {
-        $user = auth()->user();
-        if ($user->hasRole('super_admin')) {
-            return true;
-        }
-        return $user->hasRole('tenant_admin') && $record->tenant_id === $user->tenant_id;
+        // RewardGrant是系統自動產生的記錄，禁止刪除以保持歷史資料一致性
+        return false;
     }
 }

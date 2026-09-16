@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\HandlesTenantScoping;
 use App\Models\PointAccount;
 use App\Filament\Resources\PointAccountResource\Pages;
 use Filament\Forms;
@@ -16,6 +17,8 @@ use BackedEnum;
 
 class PointAccountResource extends Resource
 {
+    use HandlesTenantScoping;
+
     protected static ?string $model = PointAccount::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-banknotes';
     protected static string|UnitEnum|null $navigationGroup = '會員管理';
@@ -25,33 +28,40 @@ class PointAccountResource extends Resource
     protected static ?string $navigationLabel = '點數帳戶';
 
     /**
-     * 是否將資源範圍限制在目前的租戶
-     * Super Admin（tenant_id為null）可以存取所有租戶的資料
+     * 處理Eloquent查詢，僅處理必要的eager loading
+     * 租戶隔離由Filament原生機制和Model層全域範圍處理
      */
-    public static function isScopedToTenant(): bool
+    public static function getEloquentQuery(): Builder
     {
-        $user = auth()->user();
+        $query = parent::getEloquentQuery();
 
-        // 如果是super_admin，不限制租戶範圍，可以看到所有資料
-        if ($user && is_null($user->tenant_id)) {
-            return false;
-        }
+        // 僅處理eager loading，租戶範圍由底層機制處理
+        $query = static::applyTenantScoping($query, ['tenant', 'customer']);
 
-        // 一般使用者維持租戶隔離
-        return true;
+        return $query;
     }
 
     public static function form(Schema $schema): Schema
     {
         return $schema
             ->schema([
-                Forms\Components\Select::make('tenant_id')
-                    ->label('租戶')
-                    ->relationship('tenant', 'name')
-                    ->required(fn() => !auth()->user()->hasRole('tenant_admin')),
+                \App\Forms\Components\TenantSelect::make(),
                 Forms\Components\Select::make('customer_id')
                     ->label('客戶')
-                    ->relationship('customer', 'name')
+                    ->relationship('customer', 'name', function ($query) {
+                        $user = auth()->user();
+                        $panel = filament()->getCurrentOrDefaultPanel();
+
+                        if ($user && $user->isSuperAdmin()) {
+                            // Super Admin 可以看到所有客戶
+                            if ($panel?->hasTenancy()) {
+                                $query->withoutGlobalScope($panel->getTenancyScopeName());
+                            }
+                        }
+                        // Tenant Admin 由Model全域範圍自動處理，無需手動過濾
+
+                        return $query;
+                    })
                     ->required()
                     ->searchable(),
                 Forms\Components\TextInput::make('balance')
@@ -72,13 +82,7 @@ class PointAccountResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->query(function () {
-                $user = auth()->user();
-                if ($user->hasRole('super_admin')) {
-                    return PointAccount::with(['tenant', 'customer']);
-                }
-                return PointAccount::where('tenant_id', $user->tenant_id)->with(['tenant', 'customer']);
-            })
+            ->query(static::getEloquentQuery())
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('客戶')

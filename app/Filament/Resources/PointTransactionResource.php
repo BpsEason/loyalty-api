@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\HandlesTenantScoping;
 use App\Models\PointTransaction;
 use App\Filament\Resources\PointTransactionResource\Pages;
 use Filament\Forms;
@@ -16,6 +17,8 @@ use BackedEnum;
 
 class PointTransactionResource extends Resource
 {
+    use HandlesTenantScoping;
+
     protected static ?string $model = PointTransaction::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-arrow-trending-up';
     protected static string|UnitEnum|null $navigationGroup = '會員管理';
@@ -25,62 +28,76 @@ class PointTransactionResource extends Resource
     protected static ?string $navigationLabel = '點數交易';
 
     /**
-     * 是否將資源範圍限制在目前的租戶
-     * Super Admin（tenant_id為null）可以存取所有租戶的資料
+     * 處理Eloquent查詢，僅處理必要的eager loading
+     * 租戶隔離由Filament原生機制和Model層全域範圍處理
      */
-    public static function isScopedToTenant(): bool
+    public static function getEloquentQuery(): Builder
     {
-        $user = auth()->user();
+        $query = parent::getEloquentQuery();
 
-        // 如果是super_admin，不限制租戶範圍，可以看到所有資料
-        if ($user && is_null($user->tenant_id)) {
-            return false;
-        }
+        // 僅處理eager loading，租戶範圍由底層機制處理
+        $query = static::applyTenantScoping($query, ['tenant', 'pointAccount.customer']);
 
-        // 一般使用者維持租戶隔離
-        return true;
+        return $query;
     }
 
     public static function form(Schema $schema): Schema
     {
         return $schema
             ->schema([
-                Forms\Components\Select::make('tenant_id')
-                    ->label('租戶')
-                    ->relationship('tenant', 'name')
-                    ->required(fn() => !auth()->user()->hasRole('tenant_admin')),
+                \App\Forms\Components\TenantSelect::make(),
                 Forms\Components\Select::make('point_account_id')
                     ->label('點數帳戶')
-                    ->relationship('pointAccount', 'id')
+                    ->relationship(
+                        'pointAccount',
+                        'id',
+                        function ($query, callable $get) {
+                            $user = auth()->user();
+                            $panel = filament()->getCurrentOrDefaultPanel();
+                            $tenantId = $get('tenant_id');
+
+                            if ($user && $user->isSuperAdmin()) {
+                                if ($panel?->hasTenancy()) {
+                                    $query->withoutGlobalScope($panel->getTenancyScopeName());
+                                }
+                                if ($tenantId) {
+                                    $query->where('tenant_id', $tenantId);
+                                }
+                            }
+                            // Tenant Admin 由Model全域範圍自動處理，無需手動過濾
+
+                            return $query->select('id', 'customer_id');
+                        }
+                    )
+                    ->getOptionLabelFromRecordUsing(fn($record) => "帳戶 #{$record->id} - {$record->customer->name}")
                     ->required()
-                    ->searchable(),
+                    ->searchable()
+                    ->reactive(),
                 Forms\Components\TextInput::make('amount')
                     ->label('金額')
                     ->required()
-                    ->numeric(),
+                    ->numeric()
+                    ->disabled(fn($context) => $context !== 'create'),
                 Forms\Components\TextInput::make('type')
                     ->label('類型')
                     ->required()
-                    ->maxLength(50),
+                    ->maxLength(50)
+                    ->disabled(fn($context) => $context !== 'create'),
                 Forms\Components\Textarea::make('description')
                     ->label('描述')
                     ->maxLength(65535)
-                    ->columnSpanFull(),
+                    ->columnSpanFull()
+                    ->disabled(fn($context) => $context !== 'create'),
                 Forms\Components\KeyValue::make('metadata')
-                    ->label('中繼資料'),
+                    ->label('中繼資料')
+                    ->disabled(true),
             ]);
     }
 
     public static function table(Table $table): Table
     {
         return $table
-            ->query(function () {
-                $user = auth()->user();
-                if ($user->hasRole('super_admin')) {
-                    return PointTransaction::with(['tenant', 'pointAccount.customer']);
-                }
-                return PointTransaction::where('tenant_id', $user->tenant_id)->with(['tenant', 'pointAccount.customer']);
-            })
+            ->query(static::getEloquentQuery())
             ->columns([
                 Tables\Columns\TextColumn::make('pointAccount.customer.name')
                     ->label('客戶')
@@ -115,13 +132,8 @@ class PointTransactionResource extends Resource
             ])
             ->actions([
                 \Filament\Actions\ViewAction::make(),
-                \Filament\Actions\EditAction::make(),
             ])
-            ->bulkActions([
-                \Filament\Actions\BulkActionGroup::make([
-                    \Filament\Actions\DeleteBulkAction::make(),
-                ]),
-            ]);
+            ->bulkActions([]);
     }
 
     public static function getRelations(): array
@@ -152,19 +164,11 @@ class PointTransactionResource extends Resource
 
     public static function canEdit(Model $record): bool
     {
-        $user = auth()->user();
-        if ($user->hasRole('super_admin')) {
-            return true;
-        }
-        return $user->hasRole('tenant_admin') && $record->tenant_id === $user->tenant_id;
+        return false;
     }
 
     public static function canDelete(Model $record): bool
     {
-        $user = auth()->user();
-        if ($user->hasRole('super_admin')) {
-            return true;
-        }
-        return $user->hasRole('tenant_admin') && $record->tenant_id === $user->tenant_id;
+        return false;
     }
 }

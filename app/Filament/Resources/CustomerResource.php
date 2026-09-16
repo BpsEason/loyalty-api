@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Models\Customer;
 use App\Filament\Resources\CustomerResource\Pages;
+use App\Filament\Concerns\HandlesTenantScoping;
 use Filament\Forms;
 use Filament\Resources\Resource;
 use Filament\Tables;
@@ -16,6 +17,8 @@ use BackedEnum;
 
 class CustomerResource extends Resource
 {
+    use HandlesTenantScoping;
+
     protected static ?string $model = Customer::class;
     protected static BackedEnum|string|null $navigationIcon = 'heroicon-o-user-group';
     protected static UnitEnum|string|null $navigationGroup = '會員管理';
@@ -25,30 +28,24 @@ class CustomerResource extends Resource
     protected static ?string $navigationLabel = '客戶';
 
     /**
-     * 是否將資源範圍限制在目前的租戶
-     * Super Admin（tenant_id為null）可以存取所有租戶的資料
+     * 處理Eloquent查詢，僅處理必要的eager loading
+     * 租戶隔離由Filament原生機制和Model層全域範圍處理
      */
-    public static function isScopedToTenant(): bool
+    public static function getEloquentQuery(): Builder
     {
-        $user = auth()->user();
+        $query = parent::getEloquentQuery();
 
-        // 如果是super_admin，不限制租戶範圍，可以看到所有資料
-        if ($user && is_null($user->tenant_id)) {
-            return false;
-        }
+        // 僅處理eager loading，租戶範圍由底層機制處理
+        $query = static::applyTenantScoping($query, ['tenant']);
 
-        // 一般使用者維持租戶隔離
-        return true;
+        return $query;
     }
 
     public static function form(Schema $schema): Schema
     {
         return $schema
             ->schema([
-                Forms\Components\Select::make('tenant_id')
-                    ->label('租戶')
-                    ->relationship('tenant', 'name')
-                    ->required(fn() => !auth()->user()->hasRole('tenant_admin')),
+                \App\Forms\Components\TenantSelect::make(),
                 Forms\Components\TextInput::make('name')
                     ->label('名稱')
                     ->required()
@@ -73,15 +70,7 @@ class CustomerResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->query(function () {
-                $user = auth()->user();
-                // Super Admin 可以看到所有客戶
-                if ($user->hasRole('super_admin')) {
-                    return Customer::with('tenant');
-                }
-                // Tenant Admin 只能看到自己租戶的客戶
-                return Customer::where('tenant_id', $user->tenant_id)->with('tenant');
-            })
+            ->query(static::getEloquentQuery())
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('名稱')

@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Models\CampaignReward;
 use App\Filament\Resources\CampaignRewardResource\Pages;
+use App\Filament\Concerns\HandlesTenantScoping;
 use Filament\Forms;
 use Filament\Resources\Resource;
 use Filament\Tables;
@@ -16,6 +17,8 @@ use BackedEnum;
 
 class CampaignRewardResource extends Resource
 {
+    use HandlesTenantScoping;
+
     protected static ?string $model = CampaignReward::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-gift';
     protected static string|UnitEnum|null $navigationGroup = '獎勵管理';
@@ -25,15 +28,25 @@ class CampaignRewardResource extends Resource
     protected static ?string $navigationLabel = '活動獎勵';
 
     /**
-     * 是否將資源範圍限制在目前的租戶
-     * CampaignReward本身沒有tenant_id欄位，所以永遠關閉Filament內建的自動租戶範圍
-     * 我們已經在query()方法中手動處理了租戶過濾
+     * 處理Eloquent查詢，實現租戶隔離邏輯
+     * CampaignReward本身沒有tenant_id，必須透過關聯的Campaign模型取得租戶
      */
-    public static function isScopedToTenant(): bool
+    public static function getEloquentQuery(): Builder
     {
-        // 永遠返回false，避免Filament自動嘗試套用tenant_id過濾
-        // CampaignReward透過campaign關聯間接取得tenant，所以不需要Filament自動處理
-        return false;
+        $user = auth()->user();
+        $query = parent::getEloquentQuery();
+
+        // 處理必要的eager loading
+        $query = static::applyTenantScoping($query, ['campaign.tenant']);
+
+        // Tenant Admin 只能看到自己租戶Campaign底下的獎勵
+        if ($user && !$user->isSuperAdmin()) {
+            $query->whereHas('campaign', function (Builder $query) use ($user) {
+                $query->where('tenant_id', $user->tenant_id);
+            });
+        }
+
+        return $query;
     }
 
     public static function form(Schema $schema): Schema
@@ -42,7 +55,22 @@ class CampaignRewardResource extends Resource
             ->schema([
                 Forms\Components\Select::make('campaign_id')
                     ->label('活動')
-                    ->relationship('campaign', 'name')
+                    ->relationship('campaign', 'name', function ($query) {
+                        $user = auth()->user();
+                        $panel = filament()->getCurrentOrDefaultPanel();
+
+                        if ($user && is_null($user->tenant_id)) {
+                            // Super Admin 可以看到所有租戶的Campaign
+                            if ($panel?->hasTenancy()) {
+                                $query->withoutGlobalScope($panel->getTenancyScopeName());
+                            }
+                        } else {
+                            // Tenant Admin 只能看到自己租戶的Campaign
+                            $query->where('tenant_id', $user->tenant_id);
+                        }
+
+                        return $query;
+                    })
                     ->required()
                     ->searchable(),
                 Forms\Components\Select::make('reward_type')
@@ -68,22 +96,20 @@ class CampaignRewardResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->query(function () {
-                $user = auth()->user();
-                if ($user->hasRole('super_admin')) {
-                    return CampaignReward::with(['campaign.tenant']);
-                }
-                return CampaignReward::whereHas('campaign', function (Builder $query) use ($user) {
-                    $query->where('tenant_id', $user->tenant_id);
-                })->with(['campaign.tenant']);
-            })
+            ->query(static::getEloquentQuery())
             ->columns([
                 Tables\Columns\TextColumn::make('campaign.name')
                     ->label('活動')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('reward_type')
                     ->label('獎勵類型')
-                    ->badge(),
+                    ->badge()
+                    ->color(fn(string $state): string => match ($state) {
+                        CampaignReward::TYPE_POINTS => 'success',
+                        CampaignReward::TYPE_BADGE => 'warning',
+                        CampaignReward::TYPE_COUPON => 'info',
+                        default => 'gray',
+                    }),
                 Tables\Columns\TextColumn::make('points')
                     ->label('點數數量')
                     ->numeric()
