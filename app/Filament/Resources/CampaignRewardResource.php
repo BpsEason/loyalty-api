@@ -21,6 +21,18 @@ class CampaignRewardResource extends Resource
     protected static string|UnitEnum|null $navigationGroup = 'Rewards';
     protected static ?int $navigationSort = 2;
 
+    /**
+     * 是否將資源範圍限制在目前的租戶
+     * CampaignReward本身沒有tenant_id欄位，所以永遠關閉Filament內建的自動租戶範圍
+     * 我們已經在query()方法中手動處理了租戶過濾
+     */
+    public static function isScopedToTenant(): bool
+    {
+        // 永遠返回false，避免Filament自動嘗試套用tenant_id過濾
+        // CampaignReward透過campaign關聯間接取得tenant，所以不需要Filament自動處理
+        return false;
+    }
+
     public static function form(Schema $schema): Schema
     {
         return $schema

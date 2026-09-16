@@ -32,6 +32,10 @@ class AdminPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Amber,
             ])
+            ->tenant(\App\Models\Tenant::class)
+            ->tenantMiddleware([
+                \App\Http\Middleware\RememberFilamentTenant::class,
+            ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
             ->pages([
@@ -57,6 +61,7 @@ class AdminPanelProvider extends PanelProvider
                 FilamentShieldPlugin::make(),
             ])
             ->authMiddleware([
+                \App\Http\Middleware\SetPermissionsTeamId::class,
                 Authenticate::class,
             ]);
     }

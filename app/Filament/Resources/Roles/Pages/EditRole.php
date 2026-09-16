@@ -28,8 +28,27 @@ class EditRole extends EditRecord
     #[Override]
     protected function mutateFormDataBeforeSave(array $data): array
     {
+        $user = auth()->user();
+        $record = $this->record;
+
+        // 非super_admin的使用者禁止修改super_admin角色
+        if (!$user->hasRole('super_admin') && $record->name === 'super_admin') {
+            abort(403, 'You are not allowed to modify the super_admin role.');
+        }
+
+        // 非super_admin的使用者禁止修改其他租戶的角色
+        if (!$user->hasRole('super_admin') && $record->team_id !== $user->tenant_id) {
+            abort(403, 'You are not allowed to modify roles from other tenants.');
+        }
+
+        // 非super_admin的使用者無法修改角色的team_id
+        if (!$user->hasRole('super_admin') && $user->hasRole('tenant_admin')) {
+            // 強制保持原有的team_id
+            $data[Utils::getTenantModelForeignKey()] = $record->team_id;
+        }
+
         $this->permissions = collect($data)
-            ->filter(fn (mixed $permission, string $key): bool => ! in_array($key, ['name', 'guard_name', 'select_all', Utils::getTenantModelForeignKey()], true))
+            ->filter(fn(mixed $permission, string $key): bool => ! in_array($key, ['name', 'guard_name', 'select_all', Utils::getTenantModelForeignKey()], true))
             ->values()
             ->flatten()
             ->unique();

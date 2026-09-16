@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Models\Customer;
 use App\Models\PointAccount;
 use App\Models\PointTransaction;
+use Spatie\Permission\PermissionRegistrar;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -21,11 +22,26 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // 1. 先執行角色權限Seeder
-        $this->call(RolesAndPermissionsSeeder::class);
+        // 先清除權限快取
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
-        // 2. 建立平台級 Super Admin (tenant_id = null) - 使用firstOrCreate避免重複建立
-        $superAdmin = User::firstOrCreate(
+        // 1. 先建立平台級 Super Admin (tenant_id = null) - 使用firstOrCreate避免重複建立
+        $globalTeamId = config('permission.default_team_id', 0);
+        // 🔑 分配全域角色前必須先切換到全域團隊ID，才能找到super_admin角色
+        setPermissionsTeamId($globalTeamId);
+
+        // 先建立平台級 Super Admin 角色
+        $columnNames = config('permission.column_names');
+        $teamForeignKey = $columnNames['team_foreign_key'];
+        $superAdminRole = \Spatie\Permission\Models\Role::firstOrCreate(
+            ['name' => 'super_admin', 'guard_name' => 'web', $teamForeignKey => $globalTeamId],
+            [$teamForeignKey => $globalTeamId]
+        );
+        // 確保 Super Admin 擁有所有權限
+        $superAdminRole->syncPermissions(\Spatie\Permission\Models\Permission::all());
+
+        // 建立 Super Admin 使用者 - 使用updateOrCreate確保既有使用者也會更新密碼
+        $superAdmin = User::updateOrCreate(
             ['email' => 'superadmin@example.com'],
             [
                 'tenant_id' => null,
@@ -33,9 +49,11 @@ class DatabaseSeeder extends Seeder
                 'password' => Hash::make('password123'),
             ]
         );
-        $superAdmin->assignRole('super_admin');
+        // 先移除所有既有角色再重新分配，避免重複插入錯誤
+        $superAdmin->roles()->detach();
+        $superAdmin->assignRole($superAdminRole);
 
-        // 3. 建立兩個測試租戶
+        // 2. 建立兩個測試租戶
         $tenantsData = [
             [
                 'name' => 'Demo Coffee',
@@ -68,14 +86,44 @@ class DatabaseSeeder extends Seeder
             $tenants->push($tenant);
         }
 
-        // 4. 為每個租戶建立管理員和員工
+        // 先確保所有權限都已建立
+        $this->ensureAllPermissionsExist();
+
+        // 3. 為每個租戶建立專屬角色、管理員和員工
         foreach ($tenants as $index => $tenant) {
             $tenantLetter = $index === 0 ? 'a' : 'b';
             $tenantName = $index === 0 ? 'A' : 'B';
 
-            // 建立Tenant Admin
+            // 🔑 第一步：切換到當前租戶的team_id，所有後續角色操作都會在這個租戶的作用域下
+            setPermissionsTeamId($tenant->id);
+
+            // 為這個租戶建立專屬的 tenant_admin 和 tenant_staff 角色
+            $tenantAdminRole = \Spatie\Permission\Models\Role::firstOrCreate(
+                ['name' => 'tenant_admin', 'guard_name' => 'web', $teamForeignKey => $tenant->id],
+                [$teamForeignKey => $tenant->id]
+            );
+            $tenantStaffRole = \Spatie\Permission\Models\Role::firstOrCreate(
+                ['name' => 'tenant_staff', 'guard_name' => 'web', $teamForeignKey => $tenant->id],
+                [$teamForeignKey => $tenant->id]
+            );
+
+            // 同步權限到該租戶的角色
+            $tenantAdminRole->syncPermissions(\Spatie\Permission\Models\Permission::all());
+            $basicPermissions = \Spatie\Permission\Models\Permission::whereIn('name', [
+                'ViewAny::Customer',
+                'View::Customer',
+                'ViewAny::PointTransaction',
+                'View::PointTransaction',
+                'ViewAny::PointAccount',
+                'View::PointAccount',
+                'ViewAny::Reward',
+                'View::Reward',
+            ])->get();
+            $tenantStaffRole->syncPermissions($basicPermissions);
+
+            // 建立Tenant Admin - 使用updateOrCreate確保既有使用者也會更新密碼
             $adminEmail = "admin-{$tenantLetter}@example.com";
-            $tenantAdmin = User::firstOrCreate(
+            $tenantAdmin = User::updateOrCreate(
                 ['email' => $adminEmail],
                 [
                     'tenant_id' => $tenant->id,
@@ -83,11 +131,13 @@ class DatabaseSeeder extends Seeder
                     'password' => Hash::make('password123'),
                 ]
             );
-            $tenantAdmin->assignRole('tenant_admin');
+            // 先移除所有既有角色再重新分配，避免重複插入錯誤
+            $tenantAdmin->roles()->detach();
+            $tenantAdmin->assignRole($tenantAdminRole);
 
-            // 建立第一個Tenant Staff
+            // 建立第一個Tenant Staff - 使用updateOrCreate確保既有使用者也會更新密碼
             $staff1Email = "staff-{$tenantLetter}1@example.com";
-            $tenantStaff1 = User::firstOrCreate(
+            $tenantStaff1 = User::updateOrCreate(
                 ['email' => $staff1Email],
                 [
                     'tenant_id' => $tenant->id,
@@ -95,11 +145,12 @@ class DatabaseSeeder extends Seeder
                     'password' => Hash::make('password123'),
                 ]
             );
-            $tenantStaff1->assignRole('tenant_staff');
+            $tenantStaff1->roles()->detach();
+            $tenantStaff1->assignRole($tenantStaffRole);
 
-            // 建立第二個Tenant Staff
+            // 建立第二個Tenant Staff - 使用updateOrCreate確保既有使用者也會更新密碼
             $staff2Email = "staff-{$tenantLetter}2@example.com";
-            $tenantStaff2 = User::firstOrCreate(
+            $tenantStaff2 = User::updateOrCreate(
                 ['email' => $staff2Email],
                 [
                     'tenant_id' => $tenant->id,
@@ -107,7 +158,8 @@ class DatabaseSeeder extends Seeder
                     'password' => Hash::make('password123'),
                 ]
             );
-            $tenantStaff2->assignRole('tenant_staff');
+            $tenantStaff2->roles()->detach();
+            $tenantStaff2->assignRole($tenantStaffRole);
 
             // 5. 為每個租戶建立5個Customer
             $customers = collect();
@@ -154,6 +206,41 @@ class DatabaseSeeder extends Seeder
 
         // 執行獎勵系統測試資料
         $this->call(RewardSeeder::class);
+    }
+
+    /**
+     * 確保所有基本權限都已建立
+     */
+    private function ensureAllPermissionsExist(): void
+    {
+        $allPermissions = [
+            'ViewAny::Customer',
+            'View::Customer',
+            'Create::Customer',
+            'Update::Customer',
+            'Delete::Customer',
+            'ViewAny::PointTransaction',
+            'View::PointTransaction',
+            'Create::PointTransaction',
+            'Update::PointTransaction',
+            'Delete::PointTransaction',
+            'ViewAny::PointAccount',
+            'View::PointAccount',
+            'Create::PointAccount',
+            'Update::PointAccount',
+            'Delete::PointAccount',
+            'ViewAny::Reward',
+            'View::Reward',
+            'Create::Reward',
+            'Update::Reward',
+            'Delete::Reward',
+        ];
+
+        foreach ($allPermissions as $permissionName) {
+            \Spatie\Permission\Models\Permission::firstOrCreate(
+                ['name' => $permissionName, 'guard_name' => 'web']
+            );
+        }
     }
 
     /**

@@ -21,6 +21,23 @@ class PointTransactionResource extends Resource
     protected static string|UnitEnum|null $navigationGroup = 'Loyalty';
     protected static ?int $navigationSort = 3;
 
+    /**
+     * 是否將資源範圍限制在目前的租戶
+     * Super Admin（tenant_id為null）可以存取所有租戶的資料
+     */
+    public static function isScopedToTenant(): bool
+    {
+        $user = auth()->user();
+
+        // 如果是super_admin，不限制租戶範圍，可以看到所有資料
+        if ($user && is_null($user->tenant_id)) {
+            return false;
+        }
+
+        // 一般使用者維持租戶隔離
+        return true;
+    }
+
     public static function form(Schema $schema): Schema
     {
         return $schema

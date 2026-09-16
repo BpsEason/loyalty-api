@@ -20,7 +20,7 @@ trait BelongsToTenant
             }
 
             // Super Admin 建立資料時不自動填入tenant_id，讓手動指定
-            if ($user->hasRole('super_admin')) {
+            if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
                 return;
             }
 
@@ -40,7 +40,7 @@ trait BelongsToTenant
             }
 
             // Super Admin 完全跳過所有租戶限制 - 優先判斷，確保不會誤套用
-            if ($user->hasRole('super_admin')) {
+            if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
                 return;
             }
 

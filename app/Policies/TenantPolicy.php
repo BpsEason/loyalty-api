@@ -11,7 +11,7 @@ use Illuminate\Auth\Access\HandlesAuthorization;
 class TenantPolicy
 {
     use HandlesAuthorization;
-    
+
     public function viewAny(AuthUser $authUser): bool
     {
         return $authUser->can('ViewAny:Tenant');
@@ -71,5 +71,4 @@ class TenantPolicy
     {
         return $authUser->can('Reorder:Tenant');
     }
-
 }

@@ -28,6 +28,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Unique;
+use Illuminate\Database\Eloquent\Builder;
 use Override;
 use UnitEnum;
 use BackedEnum;
@@ -35,7 +36,6 @@ use BackedEnum;
 class RoleResource extends Resource
 {
     use Essentials\BelongsToParent;
-    use Essentials\BelongsToTenant;
     use Essentials\HasGlobalSearch;
     use Essentials\HasLabels;
     use Essentials\HasNavigation;
@@ -57,6 +57,38 @@ class RoleResource extends Resource
     }
 
     protected static ?string $recordTitleAttribute = 'name';
+
+    /**
+     * 是否將資源範圍限制在目前的租戶
+     * Role模型使用team_id而非tenant_id，因此需要手動處理租戶隔離
+     */
+    public static function isScopedToTenant(): bool
+    {
+        // 關閉Filament內建的自動租戶範圍，我們會手動處理team_id過濾
+        return false;
+    }
+
+    /**
+     * 覆蓋角色資源查詢，確保租戶管理員只能檢視與管理該租戶內的角色
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        $query = parent::getEloquentQuery();
+        $user = auth()->user();
+
+        if (!$user) {
+            return $query;
+        }
+
+        // Super Admin (tenant_id為null) 可以檢視所有角色
+        if ($user->isSuperAdmin() || is_null($user->tenant_id)) {
+            return $query;
+        }
+
+        // 一般租戶管理員只能檢視所屬租戶 (team_id === tenant_id) 的角色，並自動排除 super_admin
+        return $query->where('team_id', $user->tenant_id)
+            ->where('name', '!=', 'super_admin');
+    }
 
     #[Override]
     public static function form(Schema $schema): Schema
@@ -188,21 +220,74 @@ class RoleResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return auth()->user()->hasRole('super_admin');
+        return auth()->user()->hasAnyRole(['super_admin', 'tenant_admin']);
     }
 
     public static function canCreate(): bool
     {
-        return auth()->user()->hasRole('super_admin');
+        return auth()->user()->hasAnyRole(['super_admin', 'tenant_admin']);
     }
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return auth()->user()->hasRole('super_admin');
+        $user = auth()->user();
+
+        // super_admin 可以編輯所有角色
+        if ($user->hasRole('super_admin')) {
+            return true;
+        }
+
+        // tenant_admin 只能編輯自己租戶的非super_admin角色
+        if (
+            $user->hasRole('tenant_admin') &&
+            $record->name !== 'super_admin' &&
+            $record->team_id === $user->tenant_id
+        ) {
+            return true;
+        }
+
+        return false;
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return auth()->user()->hasRole('super_admin');
+        $user = auth()->user();
+
+        // super_admin 可以刪除所有角色
+        if ($user->hasRole('super_admin')) {
+            return true;
+        }
+
+        // tenant_admin 只能刪除自己租戶的非super_admin角色
+        if (
+            $user->hasRole('tenant_admin') &&
+            $record->name !== 'super_admin' &&
+            $record->team_id === $user->tenant_id
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public static function canView(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        $user = auth()->user();
+
+        // super_admin 可以查看所有角色
+        if ($user->hasRole('super_admin')) {
+            return true;
+        }
+
+        // tenant_admin 只能查看自己租戶的非super_admin角色
+        if (
+            $user->hasRole('tenant_admin') &&
+            $record->name !== 'super_admin' &&
+            $record->team_id === $user->tenant_id
+        ) {
+            return true;
+        }
+
+        return false;
     }
 }
