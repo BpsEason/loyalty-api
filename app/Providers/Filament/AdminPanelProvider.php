@@ -34,15 +34,13 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->globalSearch(false)
             ->login()
+            ->brandName('Loyalty Platform')
+            ->font('Inter')
             ->colors([
-                'primary' => Color::Blue,
-                'success' => Color::Emerald,
-                'warning' => Color::Amber,
-                'danger' => Color::Rose,
-                'gray' => Color::Slate,
+                'primary' => 'var(--primary-500)',
             ])
-            ->darkMode(false)
-            // ->viteTheme('resources/css/filament/admin/theme.css') 暫時停用自訂主題，恢復使用官方預設 CSS
+            ->darkMode(true)
+            ->viteTheme('resources/css/filament/admin/theme.css')
             ->tenant(\App\Models\Tenant::class)
             ->tenantMiddleware([
                 \App\Http\Middleware\RememberFilamentTenant::class,

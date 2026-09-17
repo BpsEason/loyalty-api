@@ -1004,6 +1004,40 @@ storage/app/public
 
 ---
 
+# 📦 NPM Setup
+
+安裝 Frontend Dependencies：
+
+```bash
+npm install
+```
+
+Development Environment：
+
+```bash
+npm run dev
+```
+
+Production Build：
+
+```bash
+npm run build
+```
+
+Production Deployment 前應先執行：
+
+```bash
+npm run build
+```
+
+Build 後的 Frontend Assets 位於：
+
+```text
+public/build
+```
+
+---
+
 # 📖 API Documentation Setup
 
 產生 Swagger Documentation：

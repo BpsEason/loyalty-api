@@ -1,32 +1,226 @@
-/* Filament v5 + Tailwind CSS v4 官方標準主題寫法 */
-@import "tailwindcss";
+@import "../../../../vendor/filament/filament/resources/css/theme.css";
 
-/* 透過 Tailwind v4 官方 @theme 機制覆寫，自動連動所有 Filament 元件顏色 */
-@theme {
-    --color-gray-900: #0f172a; /* 側邊欄背景色 */
-    --color-gray-800: #1e293b; /* 滑鼠懸停背景色 */
-    --color-primary-600: #2563eb; /* 活躍項目藍色 */
+@config "../../../../tailwind.config.js";
+
+@layer base {
+    :root {
+        --font-family: "Inter", sans-serif;
+
+        /* Light Theme Color Tokens (Phase 2: Bright & Clean) */
+        --background: 248 250 252; /* slate-50 */
+        --surface: 255 255 255; /* white */
+        --surface-subtle: 238 242 255; /* primary-50 (indigo-50) */
+        --surface-elevated: 255 255 255; /* white */
+        --surface-active: 99 102 241; /* indigo-500 */
+
+        --border-color: 241 245 249; /* slate-100 */
+        --border-color-subtle: 248 250 252; /* slate-50 */
+
+        --text-primary: 15 23 42; /* slate-900 */
+        --text-secondary: 51 65 85; /* slate-700 */
+        --text-muted: 100 116 139; /* slate-500 */
+        --text-on-primary: 255 255 255; /* white */
+
+        /* Brand & Semantic Colors */
+        --primary-50: 238 242 255;
+        --primary-100: 224 231 255;
+        --primary-200: 199 210 254;
+        --primary-300: 165 180 252;
+        --primary-400: 129 140 248;
+        --primary-500: 99 102 241;
+        --primary-600: 79 70 229;
+        --primary-700: 67 56 202;
+        --primary-800: 55 48 163;
+        --primary-900: 49 46 129;
+        --primary-950: 30 27 75;
+
+        --success-500: 16 185 129;
+        --warning-500: 245 158 11;
+        --danger-500: 239 68 68;
+        --gray-500: 100 116 139;
+
+        /* Shadows */
+        --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+        --shadow-md:
+            0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        --shadow-lg:
+            0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    }
+
+    .dark {
+        /* Dark Theme Color Tokens */
+        --background: 11 17 32; /* #0b1120 */
+        --surface: 17 24 39; /* #111827 */
+        --surface-subtle: 11 17 32; /* #0b1120 */
+        --surface-elevated: 23 32 51; /* #172033 */
+        --surface-active: 79 70 229; /* indigo-600 */
+
+        --border-color: 38 50 68; /* #263244 */
+        --border-color-subtle: 23 32 51; /* #172033 */
+
+        --text-primary: 248 250 252; /* slate-50 */
+        --text-secondary: 148 163 184; /* slate-400 */
+        --text-muted: 71 85 105; /* slate-600 */
+        --text-on-primary: 255 255 255; /* white */
+
+        /* Shadows */
+        --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.15);
+        --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.2), 0 1px 2px -1px rgb(0 0 0 / 0.2);
+        --shadow-md:
+            0 4px 6px -1px rgb(0 0 0 / 0.2), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+        --shadow-lg:
+            0 10px 15px -3px rgb(0 0 0 / 0.2), 0 4px 6px -4px rgb(0 0 0 / 0.2);
+    }
 }
 
-/* 僅定義側邊欄寬度變數，不修改任何布局屬性 */
-:root {
-    --fi-sidebar-width: 16rem;
+@layer base {
+    :root {
+        /* Filament Variable Overrides */
+        --body-bg: rgb(var(--background));
+        --body-color: rgb(var(--text-primary));
+        --font-family: var(--font-family);
+
+        /* Primary */
+        --primary-50: var(--primary-50);
+        --primary-100: var(--primary-100);
+        --primary-200: var(--primary-200);
+        --primary-300: var(--primary-300);
+        --primary-400: var(--primary-400);
+        --primary-500: var(--primary-500);
+        --primary-600: var(--primary-600);
+        --primary-700: var(--primary-700);
+        --primary-800: var(--primary-800);
+        --primary-900: var(--primary-900);
+        --primary-950: var(--primary-950);
+
+        /* Danger */
+        --danger-500: var(--danger-500);
+        /* ... other danger shades if needed */
+
+        /* Warning */
+        --warning-500: var(--warning-500);
+        /* ... other warning shades if needed */
+
+        /* Success */
+        --success-500: var(--success-500);
+        /* ... other success shades if needed */
+
+        /* Gray */
+        --gray-50: rgb(var(--surface-subtle));
+        --gray-100: rgb(var(--border-color-subtle));
+        --gray-200: rgb(var(--border-color));
+        --gray-300: rgb(var(--text-muted));
+        --gray-400: rgb(var(--text-muted));
+        --gray-500: rgb(var(--text-secondary));
+        --gray-600: rgb(var(--text-secondary));
+        --gray-700: rgb(var(--text-primary));
+        --gray-800: rgb(var(--text-primary));
+        --gray-900: rgb(var(--text-primary));
+        --gray-950: rgb(var(--text-primary));
+
+        /* Layout */
+        --sidebar-bg: rgb(var(--surface));
+        --sidebar-width: 20rem;
+        --main-max-w: 100%;
+
+        /* Topbar */
+        --topbar-bg: rgb(var(--surface) / 0.8);
+        --topbar-border-color: rgb(var(--border-color));
+
+        /* Card */
+        --card-bg: rgb(var(--surface));
+        --card-border-color: rgb(var(--border-color));
+        --card-header-bg: rgb(var(--surface));
+        --card-box-shadow: var(--shadow-sm);
+
+        /* Section */
+        --section-box-shadow: var(--shadow-sm);
+
+        /* Table */
+        --table-bg: rgb(var(--surface));
+        --table-header-bg: rgb(var(--surface-subtle));
+        --table-border-color: rgb(var(--border-color));
+        --table-striped-bg: rgb(var(--surface-subtle));
+        --table-row-hover-bg: rgb(var(--surface-subtle));
+
+        /* Forms */
+        --input-bg: rgb(var(--surface));
+        --input-border-color: rgb(var(--border-color));
+        --input-color: rgb(var(--text-primary));
+        --input-placeholder-color: rgb(var(--text-muted));
+        --input-focus-ring-color: rgb(var(--primary-500));
+
+        /* Buttons */
+        --btn-box-shadow: var(--shadow-sm);
+
+        /* Modals */
+        --modal-bg: rgb(var(--surface-elevated));
+        --modal-box-shadow: var(--shadow-lg);
+
+        /* Dropdowns */
+        --dropdown-bg: rgb(var(--surface-elevated));
+        --dropdown-border-color: rgb(var(--border-color));
+        --dropdown-box-shadow: var(--shadow-md);
+    }
+
+    .dark {
+        --topbar-bg: rgb(var(--surface) / 0.8);
+    }
+
+    body {
+        @apply bg-background font-sans text-text-primary;
+    }
 }
 
-/* Filament v5 正確的 BEM 結構，僅覆寫顏色 */
-.fi-sidebar {
-    background-color: var(--color-gray-900) !important;
-}
+@layer components {
+    /* Sidebar Customization */
+    .fi-sidebar {
+        @apply border-e border-gray-200;
+    }
+    .dark .fi-sidebar {
+        @apply border-gray-200;
+    }
+    .fi-sidebar-header {
+        @apply border-b border-gray-200;
+    }
+    .dark .fi-sidebar-header {
+        @apply border-gray-200;
+    }
+    .fi-sidebar-nav .fi-nav-group-label {
+        @apply text-text-muted;
+    }
+    .fi-sidebar-nav .fi-nav-item a:hover {
+        @apply bg-gray-100;
+    }
+    .dark .fi-sidebar-nav .fi-nav-item a:hover {
+        @apply bg-gray-500/10;
+    }
+    .fi-sidebar-nav .fi-nav-item-active > a {
+        @apply bg-primary-50 text-primary-600;
+    }
+    .dark .fi-sidebar-nav .fi-nav-item-active > a {
+        @apply bg-primary-500/10 text-primary-400;
+    }
 
-.fi-sidebar-item-btn {
-    color: #cbd5e1 !important;
-}
+    /* Topbar Customization */
+    .fi-topbar {
+        @apply shadow-sm backdrop-blur-md;
+        border-bottom-width: 1px;
+    }
 
-.fi-sidebar-item-btn:hover {
-    background-color: #1e293b !important;
-    color: #ffffff !important;
-}
+    /* Breadcrumbs */
+    .fi-breadcrumbs {
+        @apply text-text-muted;
+    }
 
-.fi-sidebar-group-label {
-    color: #64748b !important;
+    /* Headings */
+    .fi-header-heading {
+        @apply text-2xl font-bold tracking-tight text-text-primary;
+    }
+
+    /* Badge/Pill Customization */
+    .fi-badge {
+        @apply font-medium;
+    }
 }
