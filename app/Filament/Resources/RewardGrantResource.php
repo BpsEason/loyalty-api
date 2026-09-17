@@ -34,17 +34,25 @@ class RewardGrantResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();
+        $user = auth()->user();
 
-        // 僅處理eager loading，租戶範圍由底層機制處理
-        $query = static::applyTenantScoping($query, [
+        if ($user && method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
+            return $query->with([
+                'tenant' => fn($q) => $q->withoutGlobalScopes(),
+                'campaign' => fn($q) => $q->withoutGlobalScopes(),
+                'campaignReward' => fn($q) => $q->withoutGlobalScopes(),
+                'customer' => fn($q) => $q->withoutGlobalScopes(),
+                'pointTransaction' => fn($q) => $q->withoutGlobalScopes(),
+            ]);
+        }
+
+        return $query->with([
             'tenant',
             'campaign',
             'campaignReward',
             'customer',
-            'pointTransaction'
+            'pointTransaction',
         ]);
-
-        return $query;
     }
 
     public static function form(Schema $schema): Schema
@@ -147,7 +155,6 @@ class RewardGrantResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->query(static::getEloquentQuery())
             ->columns([
                 Tables\Columns\TextColumn::make('campaign.name')
                     ->label('活動')

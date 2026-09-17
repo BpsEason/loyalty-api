@@ -28,26 +28,11 @@ class CampaignRewardResource extends Resource
     protected static ?string $navigationLabel = '活動獎勵';
     protected static ?string $tenantOwnershipRelationshipName = 'campaign';
 
-    /**
-     * 處理Eloquent查詢，實現租戶隔離邏輯
-     * CampaignReward本身沒有tenant_id，必須透過關聯的Campaign模型取得租戶
-     */
     public static function getEloquentQuery(): Builder
     {
-        $user = auth()->user();
         $query = parent::getEloquentQuery();
 
-        // 處理必要的eager loading
-        $query = static::applyTenantScoping($query, ['campaign.tenant']);
-
-        // Tenant Admin 只能看到自己租戶Campaign底下的獎勵
-        if ($user && !$user->isSuperAdmin()) {
-            $query->whereHas('campaign', function (Builder $query) use ($user) {
-                $query->where('tenant_id', $user->tenant_id);
-            });
-        }
-
-        return $query;
+        return static::applyTenantScoping($query, ['campaign.tenant']);
     }
 
     public static function form(Schema $schema): Schema
@@ -56,21 +41,14 @@ class CampaignRewardResource extends Resource
             ->schema([
                 Forms\Components\Select::make('campaign_id')
                     ->label('活動')
-                    ->relationship('campaign', 'name', function ($query) {
+                    ->relationship('campaign', 'name', function (Builder $query) {
                         $user = auth()->user();
-                        $panel = filament()->getCurrentOrDefaultPanel();
 
-                        if ($user && is_null($user->tenant_id)) {
-                            // Super Admin 可以看到所有租戶的Campaign
-                            if ($panel?->hasTenancy()) {
-                                $query->withoutGlobalScope($panel->getTenancyScopeName());
-                            }
-                        } else {
-                            // Tenant Admin 只能看到自己租戶的Campaign
-                            $query->where('tenant_id', $user->tenant_id);
+                        if ($user && $user->hasRole('super_admin')) {
+                            return $query->withoutGlobalScope('tenant');
                         }
 
-                        return $query;
+                        return $query->where('tenant_id', $user?->tenant_id);
                     })
                     ->required()
                     ->searchable(),
@@ -97,7 +75,6 @@ class CampaignRewardResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->query(static::getEloquentQuery())
             ->columns([
                 Tables\Columns\TextColumn::make('campaign.name')
                     ->label('活動')
@@ -167,29 +144,42 @@ class CampaignRewardResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return auth()->user()->hasAnyRole(['super_admin', 'tenant_admin']);
+        return auth()->user()?->hasAnyRole(['super_admin', 'tenant_admin']) ?? false;
     }
 
     public static function canCreate(): bool
     {
-        return auth()->user()->hasAnyRole(['super_admin', 'tenant_admin']);
+        return auth()->user()?->hasAnyRole(['super_admin', 'tenant_admin']) ?? false;
     }
 
     public static function canEdit(Model $record): bool
     {
         $user = auth()->user();
+
+        if (!$user) {
+            return false;
+        }
+
         if ($user->hasRole('super_admin')) {
             return true;
         }
-        return $user->hasRole('tenant_admin') && $record->campaign->tenant_id === $user->tenant_id;
+
+        // 利用已加載的 campaign 進行比對，避免 Lazy Loading 產生額外查詢
+        return $user->hasRole('tenant_admin') && $record->campaign?->tenant_id === $user->tenant_id;
     }
 
     public static function canDelete(Model $record): bool
     {
         $user = auth()->user();
+
+        if (!$user) {
+            return false;
+        }
+
         if ($user->hasRole('super_admin')) {
             return true;
         }
-        return $user->hasRole('tenant_admin') && $record->campaign->tenant_id === $user->tenant_id;
+
+        return $user->hasRole('tenant_admin') && $record->campaign?->tenant_id === $user->tenant_id;
     }
 }
