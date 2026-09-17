@@ -32,13 +32,14 @@ trait BelongsToTenant
 
         static::addGlobalScope('tenant', function (Builder $builder) {
             $user = auth()->user();
-            $tenantResolver = app(TenantResolver::class);
-            $tenantId = $tenantResolver->getCurrentTenantId();
 
-            // Super Admin 完全跳過所有租戶限制 - 優先判斷，確保不會誤套用
+            // Super Admin 完全跳過所有租戶限制 - 最先判斷，確保不會誤套用
             if ($user && method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
                 return;
             }
+
+            $tenantResolver = app(TenantResolver::class);
+            $tenantId = $tenantResolver->getCurrentTenantId();
 
             // 只要有目前的租戶ID，無論使用者狀態，都必須套用租戶範圍，防止跨租戶存取
             if ($tenantId) {

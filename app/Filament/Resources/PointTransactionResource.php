@@ -34,9 +34,25 @@ class PointTransactionResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();
+        $user = auth()->user();
+        $panel = filament()->getCurrentOrDefaultPanel();
 
-        // 僅處理eager loading，租戶範圍由底層機制處理
-        $query = static::applyTenantScoping($query, ['tenant', 'pointAccount.customer']);
+        // 永遠載入 tenant 關聯
+        $withRelations = ['tenant'];
+
+        if ($user && $user->isSuperAdmin() && $panel?->hasTenancy()) {
+            $scopeName = $panel->getTenancyScopeName();
+            // 對嵌套關聯 pointAccount.customer 移除 Filament 原生租戶範圍
+            // 同時也移除 Model 層自己的 tenant 全域範圍，雙重保險
+            $withRelations['pointAccount'] = fn($q) => $q->withoutGlobalScope($scopeName)->withoutGlobalScope('tenant');
+            $withRelations['pointAccount.customer'] = fn($q) => $q->withoutGlobalScope($scopeName)->withoutGlobalScope('tenant');
+        } else {
+            // 一般使用者直接載入，由 Model 全域範圍自動處理
+            $withRelations[] = 'pointAccount.customer';
+        }
+
+        // 處理 eager loading
+        $query = static::applyTenantScoping($query, $withRelations);
 
         return $query;
     }

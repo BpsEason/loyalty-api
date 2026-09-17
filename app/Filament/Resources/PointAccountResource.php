@@ -34,9 +34,23 @@ class PointAccountResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();
+        $user = auth()->user();
+        $panel = filament()->getCurrentOrDefaultPanel();
 
-        // 僅處理eager loading，租戶範圍由底層機制處理
-        $query = static::applyTenantScoping($query, ['tenant', 'customer']);
+        // 永遠載入 tenant 關聯
+        $withRelations = ['tenant'];
+
+        if ($user && $user->isSuperAdmin() && $panel?->hasTenancy()) {
+            $scopeName = $panel->getTenancyScopeName();
+            // 正確格式：將 customer 關聯與其約束直接加入 with 陣列
+            $withRelations['customer'] = fn($q) => $q->withoutGlobalScope($scopeName);
+        } else {
+            // 一般使用者直接載入 customer，由 Model 全域範圍自動處理
+            $withRelations[] = 'customer';
+        }
+
+        // 處理 eager loading
+        $query = static::applyTenantScoping($query, $withRelations);
 
         return $query;
     }
@@ -45,17 +59,22 @@ class PointAccountResource extends Resource
     {
         return $schema
             ->schema([
-                \App\Forms\Components\TenantSelect::make(),
+                \App\Forms\Components\TenantSelect::make()
+                    ->reactive(),
                 Forms\Components\Select::make('customer_id')
                     ->label('客戶')
-                    ->relationship('customer', 'name', function ($query) {
+                    ->relationship('customer', 'name', function ($query, $get) {
                         $user = auth()->user();
                         $panel = filament()->getCurrentOrDefaultPanel();
+                        $tenantId = $get('tenant_id');
 
                         if ($user && $user->isSuperAdmin()) {
-                            // Super Admin 可以看到所有客戶
+                            // Super Admin 可以看到所有客戶（配合選取租戶過濾）
                             if ($panel?->hasTenancy()) {
                                 $query->withoutGlobalScope($panel->getTenancyScopeName());
+                            }
+                            if ($tenantId) {
+                                $query->where('tenant_id', $tenantId);
                             }
                         }
                         // Tenant Admin 由Model全域範圍自動處理，無需手動過濾

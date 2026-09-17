@@ -26,6 +26,7 @@ class CampaignRewardResource extends Resource
     protected static ?string $modelLabel = '活動獎勵';
     protected static ?string $pluralModelLabel = '活動獎勵';
     protected static ?string $navigationLabel = '活動獎勵';
+    protected static ?string $tenantOwnershipRelationshipName = 'campaign';
 
     /**
      * 處理Eloquent查詢，實現租戶隔離邏輯
