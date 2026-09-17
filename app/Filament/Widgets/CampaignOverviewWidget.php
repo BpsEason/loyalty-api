@@ -60,6 +60,6 @@ class CampaignOverviewWidget extends ChartWidget
 
     public function getHeading(): string
     {
-        return '活動狀態分布';
+        return '活動狀態總覽';
     }
 }

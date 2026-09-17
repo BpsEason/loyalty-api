@@ -1,0 +1,32 @@
+/* Filament v5 + Tailwind CSS v4 官方標準主題寫法 */
+@import "tailwindcss";
+
+/* 透過 Tailwind v4 官方 @theme 機制覆寫，自動連動所有 Filament 元件顏色 */
+@theme {
+    --color-gray-900: #0f172a; /* 側邊欄背景色 */
+    --color-gray-800: #1e293b; /* 滑鼠懸停背景色 */
+    --color-primary-600: #2563eb; /* 活躍項目藍色 */
+}
+
+/* 僅定義側邊欄寬度變數，不修改任何布局屬性 */
+:root {
+    --fi-sidebar-width: 16rem;
+}
+
+/* Filament v5 正確的 BEM 結構，僅覆寫顏色 */
+.fi-sidebar {
+    background-color: var(--color-gray-900) !important;
+}
+
+.fi-sidebar-item-btn {
+    color: #cbd5e1 !important;
+}
+
+.fi-sidebar-item-btn:hover {
+    background-color: #1e293b !important;
+    color: #ffffff !important;
+}
+
+.fi-sidebar-group-label {
+    color: #64748b !important;
+}

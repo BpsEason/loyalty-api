@@ -21,7 +21,7 @@ class PointAccountResource extends Resource
 
     protected static ?string $model = PointAccount::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-banknotes';
-    protected static string|UnitEnum|null $navigationGroup = '會員管理';
+    protected static string|UnitEnum|null $navigationGroup = '客戶管理';
     protected static ?int $navigationSort = 2;
     protected static ?string $modelLabel = '點數帳戶';
     protected static ?string $pluralModelLabel = '點數帳戶';

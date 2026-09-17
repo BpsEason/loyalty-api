@@ -35,8 +35,14 @@ class AdminPanelProvider extends PanelProvider
             ->globalSearch(false)
             ->login()
             ->colors([
-                'primary' => Color::Amber,
+                'primary' => Color::Blue,
+                'success' => Color::Emerald,
+                'warning' => Color::Amber,
+                'danger' => Color::Rose,
+                'gray' => Color::Slate,
             ])
+            ->darkMode(false)
+            // ->viteTheme('resources/css/filament/admin/theme.css') 暫時停用自訂主題，恢復使用官方預設 CSS
             ->tenant(\App\Models\Tenant::class)
             ->tenantMiddleware([
                 \App\Http\Middleware\RememberFilamentTenant::class,

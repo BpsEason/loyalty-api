@@ -21,7 +21,7 @@ class CustomerResource extends Resource
 
     protected static ?string $model = Customer::class;
     protected static BackedEnum|string|null $navigationIcon = 'heroicon-o-user-group';
-    protected static UnitEnum|string|null $navigationGroup = '會員管理';
+    protected static string|UnitEnum|null $navigationGroup = '客戶管理';
     protected static ?int $navigationSort = 1;
     protected static ?string $modelLabel = '客戶';
     protected static ?string $pluralModelLabel = '客戶';
@@ -70,23 +70,56 @@ class CustomerResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->query(static::getEloquentQuery())
+            ->query(static::getEloquentQuery()->with('pointAccounts.pointTransactions'))
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->label('名稱')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('email')
-                    ->label('電子郵件')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('phone')
-                    ->label('電話'),
-                Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('租戶')
+                    ->label('客戶')
                     ->searchable()
-                    ->visible(fn() => auth()->user()->hasRole('super_admin')),
+                    ->description(fn(Customer $record): string => $record->email),
+
+                Tables\Columns\TextColumn::make('metadata.tier')
+                    ->label('會員等級')
+                    ->badge()
+                    ->color(fn(string $state): string => match (strtolower($state)) {
+                        'platinum' => 'warning',
+                        'gold' => 'warning',
+                        'silver' => 'info',
+                        'bronze' => 'secondary',
+                        default => 'secondary',
+                    })
+                    ->formatStateUsing(fn(string $state): string => match (strtolower($state)) {
+                        'platinum' => '白金會員',
+                        'gold' => '黃金會員',
+                        'silver' => '白銀會員',
+                        'bronze' => '青銅會員',
+                        default => $state,
+                    }),
+
+                Tables\Columns\TextColumn::make('total_points')
+                    ->label('目前點數')
+                    ->getStateUsing(fn(Customer $record) => number_format($record->pointAccounts?->balance ?? 0))
+                    ->sortable(),
+
+                Tables\Columns\TextColumn::make('last_activity')
+                    ->label('最後活動')
+                    ->getStateUsing(function (Customer $record) {
+                        if (!$record->pointAccounts) {
+                            return '無活動記錄';
+                        }
+                        $lastTransaction = $record->pointAccounts->pointTransactions()->latest('created_at')->first();
+                        return $lastTransaction?->created_at?->diffForHumans() ?? '無活動記錄';
+                    }),
+
+                Tables\Columns\TextColumn::make('tenant.name')
+                    ->label('所屬租戶')
+                    ->searchable()
+                    ->visible(fn() => auth()->user()->hasRole('super_admin'))
+                    ->badge()
+                    ->color('gray'),
+
                 Tables\Columns\TextColumn::make('created_at')
-                    ->label('建立時間')
-                    ->dateTime()
+                    ->label('加入時間')
+                    ->dateTime('Y-m-d')
                     ->sortable(),
             ])
             ->filters([

@@ -77,7 +77,7 @@ class Customer extends Model
         return $this->belongsTo(Tenant::class);
     }
 
-    public function pointAccount(): HasOne
+    public function pointAccounts(): HasOne
     {
         return $this->hasOne(PointAccount::class);
     }

@@ -21,7 +21,7 @@ class CampaignRewardResource extends Resource
 
     protected static ?string $model = CampaignReward::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-gift';
-    protected static string|UnitEnum|null $navigationGroup = '獎勵管理';
+    protected static string|UnitEnum|null $navigationGroup = '忠誠計劃';
     protected static ?int $navigationSort = 2;
     protected static ?string $modelLabel = '活動獎勵';
     protected static ?string $pluralModelLabel = '活動獎勵';

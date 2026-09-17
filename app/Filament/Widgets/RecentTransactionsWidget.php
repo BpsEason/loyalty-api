@@ -25,7 +25,7 @@ class RecentTransactionsWidget extends BaseWidget
                     'tenant'
                 ])
                     ->latest('created_at')
-                    ->limit(10)
+                    ->limit(8)
             )
             ->columns([
                 TextColumn::make('pointAccount.customer.name')
@@ -70,8 +70,8 @@ class RecentTransactionsWidget extends BaseWidget
                     ->label('描述')
                     ->limit(50),
                 TextColumn::make('created_at')
-                    ->label('建立時間')
-                    ->dateTime('Y-m-d H:i')
+                    ->label('時間')
+                    ->since()
                     ->sortable(),
             ])
             ->paginated(false);
@@ -79,6 +79,6 @@ class RecentTransactionsWidget extends BaseWidget
 
     public function getHeading(): string
     {
-        return '最近點數交易';
+        return '最新點數異動';
     }
 }

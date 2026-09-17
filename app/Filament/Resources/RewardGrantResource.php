@@ -21,7 +21,7 @@ class RewardGrantResource extends Resource
 
     protected static ?string $model = RewardGrant::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-ticket';
-    protected static string|UnitEnum|null $navigationGroup = '獎勵管理';
+    protected static string|UnitEnum|null $navigationGroup = '忠誠計劃';
     protected static ?int $navigationSort = 3;
     protected static ?string $modelLabel = '獎勵發放';
     protected static ?string $pluralModelLabel = '獎勵發放';

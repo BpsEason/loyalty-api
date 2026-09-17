@@ -20,52 +20,54 @@ class OverviewStatsWidget extends BaseWidget
         $today = Carbon::today();
         $thisMonthStart = Carbon::now()->startOfMonth();
 
+        // 活躍會員（30天內有交易的會員）
+        $activeCustomers = Customer::whereHas('pointAccounts.pointTransactions', function ($query) use ($today) {
+            $query->where('created_at', '>=', $today->copy()->subDays(30));
+        })->count();
+
         // 會員統計
         $totalCustomers = Customer::count();
         $todayNewCustomers = Customer::whereDate('created_at', $today)->count();
-        $thisMonthNewCustomers = Customer::where('created_at', '>=', $thisMonthStart)->count();
 
-        // 點數帳戶統計
-        $totalPointAccounts = PointAccount::count();
-        $totalCurrentBalance = PointAccount::sum('balance');
-
-        // 點數交易統計
+        // 點數發放與兌換統計
+        $monthEarnPoints = PointTransaction::where('type', PointTransaction::TYPE_EARN)
+            ->where('created_at', '>=', $thisMonthStart)
+            ->sum('amount');
+        $monthRedeemPoints = PointTransaction::where('type', PointTransaction::TYPE_REDEEM)
+            ->where('created_at', '>=', $thisMonthStart)
+            ->sum('amount');
         $todayEarnPoints = PointTransaction::where('type', PointTransaction::TYPE_EARN)
             ->whereDate('created_at', $today)
             ->sum('amount');
         $todayRedeemPoints = PointTransaction::where('type', PointTransaction::TYPE_REDEEM)
             ->whereDate('created_at', $today)
             ->sum('amount');
-        $totalTransactions = PointTransaction::count();
 
         // 活動統計
         $activeCampaigns = Campaign::where('status', Campaign::STATUS_ACTIVE)->count();
-        $totalCampaigns = Campaign::count();
-
-        // 獎勵發放統計
-        $totalRewardGrants = RewardGrant::count();
-        $todayRewardGrants = RewardGrant::whereDate('granted_at', $today)->count();
+        $draftCampaigns = Campaign::where('status', Campaign::STATUS_DRAFT)->count();
+        $completedCampaigns = Campaign::where('status', Campaign::STATUS_COMPLETED)->count();
 
         return [
             Stat::make('會員總數', number_format($totalCustomers))
-                ->description("今日新增 {$todayNewCustomers} · 本月新增 {$thisMonthNewCustomers}")
+                ->description("今日新增 {$todayNewCustomers} 位 · 活躍會員 " . number_format($activeCustomers))
                 ->descriptionIcon('heroicon-m-users')
                 ->color('success'),
 
-            Stat::make('點數帳戶數', number_format($totalPointAccounts))
-                ->description("目前流通點數 " . number_format($totalCurrentBalance))
-                ->descriptionIcon('heroicon-m-wallet')
+            Stat::make('活躍會員', number_format($activeCustomers))
+                ->description("佔總會員 " . number_format(($totalCustomers > 0 ? ($activeCustomers / $totalCustomers * 100) : 0), 1) . "%")
+                ->descriptionIcon('heroicon-m-user')
                 ->color('primary'),
 
-            Stat::make('交易筆數', number_format($totalTransactions))
-                ->description("今日獲得 {$todayEarnPoints} · 今日消耗 {$todayRedeemPoints}")
+            Stat::make('本月點數發放', number_format($monthEarnPoints))
+                ->description("今日新增 " . number_format($todayEarnPoints))
                 ->descriptionIcon('heroicon-m-arrow-trending-up')
-                ->color('warning'),
+                ->color('success'),
 
-            Stat::make('進行中活動', number_format($activeCampaigns))
-                ->description("總共 {$totalCampaigns} 個活動")
-                ->descriptionIcon('heroicon-m-megaphone')
-                ->color('info'),
+            Stat::make('本月點數兌換', number_format($monthRedeemPoints))
+                ->description("今日消耗 " . number_format($todayRedeemPoints))
+                ->descriptionIcon('heroicon-m-arrow-trending-down')
+                ->color('warning'),
         ];
     }
 }

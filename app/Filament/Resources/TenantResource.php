@@ -18,7 +18,7 @@ class TenantResource extends Resource
 {
     protected static ?string $model = Tenant::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-building-office';
-    protected static string|UnitEnum|null $navigationGroup = '平台管理';
+    protected static string|UnitEnum|null $navigationGroup = '租戶管理';
     protected static ?string $modelLabel = '租戶';
     protected static ?string $pluralModelLabel = '租戶';
     protected static ?string $navigationLabel = '租戶';

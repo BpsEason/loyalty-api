@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Tenant;
+use App\Models\User;
 use App\Models\Customer;
 use App\Models\Campaign;
 use App\Models\CampaignReward;
@@ -12,6 +13,8 @@ use App\Models\PointTransaction;
 use App\Services\Reward\RewardService;
 use App\Services\Point\PointService;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
+use Spatie\Permission\Models\Role;
 use RuntimeException;
 
 class RewardSeeder extends Seeder
@@ -32,6 +35,25 @@ class RewardSeeder extends Seeder
             'name' => '動力健身',
             'domain' => 'fitness-demo.example',
             'is_active' => true,
+        ],
+    ];
+
+    // 每個租戶專屬的管理員資料（確保email全域唯一，使用各自的域名）
+    protected array $tenantAdminData = [
+        'retail' => [
+            'name' => '零售通管理員',
+            'email' => 'admin@retail-demo.example',
+            'password' => 'password',
+        ],
+        'coffee' => [
+            'name' => '咖啡日常管理員',
+            'email' => 'admin@coffee-demo.example',
+            'password' => 'password',
+        ],
+        'fitness' => [
+            'name' => '動力健身管理員',
+            'email' => 'admin@fitness-demo.example',
+            'password' => 'password',
         ],
     ];
 
@@ -299,6 +321,8 @@ class RewardSeeder extends Seeder
 
         $stats = [
             'tenants_created' => 0,
+            'tenant_admins_created' => 0,
+            'tenant_admins_reused' => 0,
             'customers_created' => 0,
             'campaigns_created' => 0,
             'rewards_created' => 0,
@@ -316,7 +340,10 @@ class RewardSeeder extends Seeder
             // 1. 建立或取得租戶
             $tenant = $this->createTenant($tenantData, $stats);
 
-            // 2. 建立租戶的客戶
+            // 2. 建立或取得租戶管理員
+            $tenantAdmin = $this->createTenantAdmin($tenantKey, $tenant, $stats);
+
+            // 3. 建立租戶的客戶
             $tenantCustomers = $this->createTenantCustomers($tenantKey, $tenant, $stats);
             if (empty($tenantCustomers)) {
                 $this->command->error("  ✗ 此租戶未建立任何客戶，跳過後續處理");
@@ -365,6 +392,61 @@ class RewardSeeder extends Seeder
         }
 
         return $tenant;
+    }
+
+    /**
+     * 建立或取得租戶管理員
+     */
+    protected function createTenantAdmin(string $tenantKey, Tenant $tenant, array &$stats): User
+    {
+        $adminData = $this->tenantAdminData[$tenantKey] ?? abort(500, "找不到租戶 {$tenantKey} 的管理員資料");
+        $columnNames = config('permission.column_names');
+        $teamForeignKey = $columnNames['team_foreign_key'];
+
+        // 切換到目前租戶的Spatie Team Scope
+        setPermissionsTeamId($tenant->id);
+
+        // 確保租戶的tenant_admin角色存在
+        $tenantAdminRole = Role::firstOrCreate(
+            [
+                'name' => 'tenant_admin',
+                'guard_name' => 'web',
+                $teamForeignKey => $tenant->id,
+            ],
+            [
+                $teamForeignKey => $tenant->id,
+            ]
+        );
+
+        // 使用withoutGlobalScopes來確保在Seeder中可以正確查詢所有使用者，不受全域租戶範圍影響
+        /** @var User $tenantAdmin */
+        $tenantAdmin = User::withoutGlobalScopes()->firstOrCreate(
+            ['email' => $adminData['email']],
+            [
+                'tenant_id' => $tenant->id,
+                'name' => $adminData['name'],
+                'email' => $adminData['email'],
+                'password' => Hash::make($adminData['password']),
+            ]
+        );
+
+        // 如果使用者是新建立的，需要指派角色
+        if ($tenantAdmin->wasRecentlyCreated) {
+            // 清除既有角色，避免重複
+            $tenantAdmin->roles()->detach();
+
+            // 切換到目前租戶的團隊ID，確保角色指派正確
+            setPermissionsTeamId($tenant->id);
+            $tenantAdmin->assignRole($tenantAdminRole);
+
+            $stats['tenant_admins_created']++;
+            $this->command->line("  ✓ 建立租戶管理員：{$adminData['name']} ({$adminData['email']})");
+        } else {
+            $stats['tenant_admins_reused']++;
+            $this->command->line("  租戶管理員已存在，重用：{$adminData['email']}");
+        }
+
+        return $tenantAdmin;
     }
 
     /**
@@ -637,6 +719,8 @@ class RewardSeeder extends Seeder
         $this->command->info('Demo資料集建立完成！');
         $this->command->line(str_repeat('=', 60));
         $this->command->line(sprintf("新增租戶：%d", $stats['tenants_created']));
+        $this->command->line(sprintf("新增租戶管理員：%d", $stats['tenant_admins_created']));
+        $this->command->line(sprintf("重用租戶管理員：%d", $stats['tenant_admins_reused']));
         $this->command->line(sprintf("新增客戶：%d", $stats['customers_created']));
         $this->command->line(sprintf("新增活動：%d", $stats['campaigns_created']));
         $this->command->line(sprintf("新增獎勵：%d", $stats['rewards_created']));
@@ -651,6 +735,7 @@ class RewardSeeder extends Seeder
         $this->command->info('目前資料庫中相關資料總量：');
         $this->command->line(str_repeat('-', 50));
         $this->command->line(sprintf("Tenant 總數：%d", \App\Models\Tenant::count()));
+        $this->command->line(sprintf("User 總數：%d", \App\Models\User::withoutGlobalScopes()->count()));
         $this->command->line(sprintf("Customer 總數：%d", \App\Models\Customer::count()));
         $this->command->line(sprintf("Campaign 總數：%d", \App\Models\Campaign::count()));
         $this->command->line(sprintf("CampaignReward 總數：%d", \App\Models\CampaignReward::count()));

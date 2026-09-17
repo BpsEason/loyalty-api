@@ -21,7 +21,7 @@ class CampaignResource extends Resource
 
     protected static ?string $model = Campaign::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-megaphone';
-    protected static string|UnitEnum|null $navigationGroup = '獎勵活動';
+    protected static string|UnitEnum|null $navigationGroup = '忠誠計劃';
     protected static ?int $navigationSort = 1;
     protected static ?string $modelLabel = '活動';
     protected static ?string $pluralModelLabel = '活動';
@@ -43,29 +43,46 @@ class CampaignResource extends Resource
         return $schema
             ->schema([
                 \App\Forms\Components\TenantSelect::make(),
-                Forms\Components\TextInput::make('name')
-                    ->label('活動名稱')
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\Textarea::make('description')
-                    ->label('活動描述')
-                    ->columnSpanFull(),
-                Forms\Components\Select::make('status')
-                    ->label('狀態')
-                    ->options([
-                        Campaign::STATUS_DRAFT => '草稿',
-                        Campaign::STATUS_ACTIVE => '啟用',
-                        Campaign::STATUS_INACTIVE => '停用',
-                        Campaign::STATUS_COMPLETED => '已完成',
+
+                \Filament\Schemas\Components\Section::make('基本資訊')
+                    ->description('設定活動的核心資訊')
+                    ->schema([
+                        Forms\Components\TextInput::make('name')
+                            ->label('活動名稱')
+                            ->required()
+                            ->maxLength(255)
+                            ->columnSpan(2),
+                        Forms\Components\Textarea::make('description')
+                            ->label('活動描述')
+                            ->columnSpanFull(),
                     ])
-                    ->required()
-                    ->default(Campaign::STATUS_DRAFT),
-                Forms\Components\DateTimePicker::make('starts_at')
-                    ->label('開始時間')
-                    ->nullable(),
-                Forms\Components\DateTimePicker::make('ends_at')
-                    ->label('結束時間')
-                    ->nullable(),
+                    ->columns(2)
+                    ->collapsible(),
+
+                \Filament\Schemas\Components\Section::make('活動設定')
+                    ->description('設定活動的時間與狀態')
+                    ->schema([
+                        Forms\Components\Select::make('status')
+                            ->label('活動狀態')
+                            ->options([
+                                Campaign::STATUS_DRAFT => '草稿',
+                                Campaign::STATUS_ACTIVE => '進行中',
+                                Campaign::STATUS_INACTIVE => '暫停',
+                                Campaign::STATUS_COMPLETED => '已結束',
+                            ])
+                            ->required()
+                            ->default(Campaign::STATUS_DRAFT),
+                        Forms\Components\DateTimePicker::make('starts_at')
+                            ->label('活動開始時間')
+                            ->nullable()
+                            ->helperText('留空表示立即開始'),
+                        Forms\Components\DateTimePicker::make('ends_at')
+                            ->label('活動結束時間')
+                            ->nullable()
+                            ->helperText('留空表示永久有效'),
+                    ])
+                    ->columns(2)
+                    ->collapsible(),
             ]);
     }
 

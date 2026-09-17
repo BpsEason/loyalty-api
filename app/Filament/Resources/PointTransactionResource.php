@@ -21,7 +21,7 @@ class PointTransactionResource extends Resource
 
     protected static ?string $model = PointTransaction::class;
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-arrow-trending-up';
-    protected static string|UnitEnum|null $navigationGroup = '會員管理';
+    protected static string|UnitEnum|null $navigationGroup = '客戶管理';
     protected static ?int $navigationSort = 3;
     protected static ?string $modelLabel = '點數交易';
     protected static ?string $pluralModelLabel = '點數交易';
