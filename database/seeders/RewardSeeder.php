@@ -19,55 +19,20 @@ use RuntimeException;
 
 class RewardSeeder extends Seeder
 {
-    // 定義三個具有不同商業角色的Demo租戶
+    // 使用DatabaseSeeder建立的正式Demo租戶（透過domain穩定識別）
     protected array $demoTenants = [
-        'retail' => [
-            'name' => '零售通',
-            'domain' => 'retail-demo.example',
-            'is_active' => true,
-        ],
         'coffee' => [
-            'name' => '咖啡日常',
-            'domain' => 'coffee-demo.example',
-            'is_active' => true,
+            'domain' => 'coffee.localhost',
         ],
         'fitness' => [
-            'name' => '動力健身',
-            'domain' => 'fitness-demo.example',
-            'is_active' => true,
+            'domain' => 'fitness.localhost',
         ],
     ];
 
-    // 每個租戶專屬的管理員資料（確保email全域唯一，使用各自的域名）
-    protected array $tenantAdminData = [
-        'retail' => [
-            'name' => '零售通管理員',
-            'email' => 'admin@retail-demo.example',
-            'password' => 'password',
-        ],
-        'coffee' => [
-            'name' => '咖啡日常管理員',
-            'email' => 'admin@coffee-demo.example',
-            'password' => 'password',
-        ],
-        'fitness' => [
-            'name' => '動力健身管理員',
-            'email' => 'admin@fitness-demo.example',
-            'password' => 'password',
-        ],
-    ];
 
-    // 每個租戶專屬的客戶資料（確保email全域唯一，使用各自的域名）
+
+    // 每個租戶專屬的客戶資料（DatabaseSeeder已建立客戶，此處用於匹配索引）
     protected array $tenantCustomerData = [
-        'retail' => [
-            ['name' => '張小明', 'email' => 'ming.zhang', 'phone' => '0912111222'],
-            ['name' => '李佳穎', 'email' => 'jiaying.li', 'phone' => '0923333444'],
-            ['name' => '王美玲', 'email' => 'meiling.wang', 'phone' => '0934555666'],
-            ['name' => '陳冠宇', 'email' => 'guanyu.chen', 'phone' => '0945777888'],
-            ['name' => '林怡君', 'email' => 'yijun.lin', 'phone' => '0956999000'],
-            ['name' => '黃子軒', 'email' => 'zixuan.huang', 'phone' => '0967111333'],
-            ['name' => '吳佩珊', 'email' => 'peishan.wu', 'phone' => '0978444555'],
-        ],
         'coffee' => [
             ['name' => '劉雅婷', 'email' => 'yating.liu', 'phone' => '0911555666'],
             ['name' => '楊志偉', 'email' => 'zhiwei.yang', 'phone' => '0922777888'],
@@ -90,51 +55,6 @@ class RewardSeeder extends Seeder
 
     // 每個租戶專屬的活動配置，符合其產業特性
     protected array $tenantCampaignData = [
-        'retail' => [
-            [
-                'name' => '新會員首購回饋',
-                'description' => '首次消費滿500元，立即獲得100點歡迎獎勵',
-                'status' => Campaign::STATUS_ACTIVE,
-                'starts_at_days' => -30,
-                'ends_at_days' => 365,
-                'rewards' => [
-                    ['type' => CampaignReward::TYPE_POINTS, 'points' => 100, 'enabled' => true],
-                    ['type' => CampaignReward::TYPE_BADGE, 'points' => 0, 'enabled' => true],
-                ]
-            ],
-            [
-                'name' => '週末消費雙倍點數',
-                'description' => '每週五六日消費，點數雙倍送',
-                'status' => Campaign::STATUS_ACTIVE,
-                'starts_at_days' => -7,
-                'ends_at_days' => 60,
-                'rewards' => [
-                    ['type' => CampaignReward::TYPE_POINTS, 'points' => 200, 'enabled' => true],
-                    ['type' => CampaignReward::TYPE_POINTS, 'points' => 400, 'enabled' => true],
-                    ['type' => CampaignReward::TYPE_COUPON, 'points' => 0, 'enabled' => true],
-                ]
-            ],
-            [
-                'name' => '2026冬季採購節',
-                'description' => '年底採購旺季，累積消費滿額送超高點數',
-                'status' => Campaign::STATUS_DRAFT,
-                'starts_at_days' => 30,
-                'ends_at_days' => 90,
-                'rewards' => [
-                    ['type' => CampaignReward::TYPE_POINTS, 'points' => 800, 'enabled' => false],
-                ]
-            ],
-            [
-                'name' => 'VIP會員感謝回饋',
-                'description' => '年度VIP會員專屬，感謝過去一年的支持',
-                'status' => Campaign::STATUS_COMPLETED,
-                'starts_at_days' => -60,
-                'ends_at_days' => -1,
-                'rewards' => [
-                    ['type' => CampaignReward::TYPE_POINTS, 'points' => 500, 'enabled' => true],
-                ]
-            ],
-        ],
         'coffee' => [
             [
                 'name' => '早安咖啡優惠',
@@ -227,22 +147,6 @@ class RewardSeeder extends Seeder
 
     // 每個租戶內的獎勵發放配置，營造不同會員狀態
     protected array $tenantGrantConfigs = [
-        'retail' => [
-            // 高活躍會員：獲得多個活動的多個獎勵
-            0 => [0 => [0], 1 => [0, 1], 3 => [0]],
-            // 一般會員：獲得少數獎勵
-            1 => [0 => [0], 1 => [0]],
-            // 活躍會員
-            2 => [1 => [1], 3 => [0]],
-            // 新會員：只有新會員獎勵
-            3 => [0 => [0]],
-            // 尚未參與活動：沒有任何獎勵
-            4 => [],
-            // 活躍會員
-            5 => [0 => [0], 1 => [0]],
-            // 歷史活動會員
-            6 => [3 => [0]],
-        ],
         'coffee' => [
             // 高活躍：每日來店，獲得多種獎勵
             0 => [0 => [0], 1 => [0], 3 => [0]],
@@ -279,18 +183,6 @@ class RewardSeeder extends Seeder
 
     // 額外為活躍會員建立歷史點數交易的時間軸
     protected array $historicalTransactions = [
-        'retail' => [
-            0 => [ // 張小明（高活躍）
-                ['days_ago' => 1, 'type' => PointTransaction::TYPE_EARN, 'amount' => 100, 'description' => '週末消費雙倍點數'],
-                ['days_ago' => 5, 'type' => PointTransaction::TYPE_REDEEM, 'amount' => 100, 'description' => '兌換購物券'],
-                ['days_ago' => 15, 'type' => PointTransaction::TYPE_EARN, 'amount' => 500, 'description' => 'VIP會員感謝回饋'],
-                ['days_ago' => 30, 'type' => PointTransaction::TYPE_EARN, 'amount' => 100, 'description' => '新會員首購回饋'],
-            ],
-            2 => [ // 王美玲（活躍）
-                ['days_ago' => 3, 'type' => PointTransaction::TYPE_EARN, 'amount' => 200, 'description' => '週末消費累積'],
-                ['days_ago' => 20, 'type' => PointTransaction::TYPE_EARN, 'amount' => 500, 'description' => 'VIP會員感謝回饋'],
-            ],
-        ],
         'coffee' => [
             0 => [ // 劉雅婷（高活躍）
                 ['days_ago' => 0, 'type' => PointTransaction::TYPE_EARN, 'amount' => 50, 'description' => '早安咖啡優惠'],
@@ -334,17 +226,20 @@ class RewardSeeder extends Seeder
 
         // 處理每個Demo租戶
         foreach ($this->demoTenants as $tenantKey => $tenantData) {
-            $this->command->info("處理租戶：{$tenantData['name']}");
+            // 1. 透過domain取得已存在的租戶（DatabaseSeeder建立的正式Demo租戶）
+            $tenant = Tenant::where('domain', $tenantData['domain'])->first();
+
+            if (!$tenant) {
+                $this->command->error("  ✗ 找不到租戶：{$tenantData['domain']}，跳過處理");
+                $this->command->newLine();
+                continue;
+            }
+
+            $this->command->info("處理租戶：{$tenant->name} ({$tenant->domain})");
             $this->command->line(str_repeat('-', 60));
 
-            // 1. 建立或取得租戶
-            $tenant = $this->createTenant($tenantData, $stats);
-
-            // 2. 建立或取得租戶管理員
-            $tenantAdmin = $this->createTenantAdmin($tenantKey, $tenant, $stats);
-
-            // 3. 建立租戶的客戶
-            $tenantCustomers = $this->createTenantCustomers($tenantKey, $tenant, $stats);
+            // 2. 取得租戶已存在的客戶（DatabaseSeeder建立的）
+            $tenantCustomers = $this->getExistingTenantCustomers($tenant, $stats);
             if (empty($tenantCustomers)) {
                 $this->command->error("  ✗ 此租戶未建立任何客戶，跳過後續處理");
                 $this->command->newLine();
@@ -370,123 +265,18 @@ class RewardSeeder extends Seeder
     }
 
     /**
-     * 建立或取得租戶
+     * 取得租戶已存在的客戶（DatabaseSeeder建立的）
      */
-    protected function createTenant(array $tenantData, array &$stats): Tenant
+    protected function getExistingTenantCustomers(Tenant $tenant, array &$stats): \Illuminate\Database\Eloquent\Collection
     {
-        /** @var Tenant $tenant */
-        $tenant = Tenant::firstOrCreate(
-            ['domain' => $tenantData['domain']],
-            [
-                'name' => $tenantData['name'],
-                'domain' => $tenantData['domain'],
-                'is_active' => $tenantData['is_active'],
-            ]
-        );
+        $customers = Customer::where('tenant_id', $tenant->id)->get();
 
-        if ($tenant->wasRecentlyCreated) {
-            $stats['tenants_created']++;
-            $this->command->line("  ✓ 建立新租戶：{$tenant->name} (ID: {$tenant->id})");
-        } else {
-            $this->command->line("  租戶已存在，重用：{$tenant->name} (ID: {$tenant->id})");
-        }
-
-        return $tenant;
-    }
-
-    /**
-     * 建立或取得租戶管理員
-     */
-    protected function createTenantAdmin(string $tenantKey, Tenant $tenant, array &$stats): User
-    {
-        $adminData = $this->tenantAdminData[$tenantKey] ?? abort(500, "找不到租戶 {$tenantKey} 的管理員資料");
-        $columnNames = config('permission.column_names');
-        $teamForeignKey = $columnNames['team_foreign_key'];
-
-        // 切換到目前租戶的Spatie Team Scope
-        setPermissionsTeamId($tenant->id);
-
-        // 確保租戶的tenant_admin角色存在
-        $tenantAdminRole = Role::firstOrCreate(
-            [
-                'name' => 'tenant_admin',
-                'guard_name' => 'web',
-                $teamForeignKey => $tenant->id,
-            ],
-            [
-                $teamForeignKey => $tenant->id,
-            ]
-        );
-
-        // 使用withoutGlobalScopes來確保在Seeder中可以正確查詢所有使用者，不受全域租戶範圍影響
-        /** @var User $tenantAdmin */
-        $tenantAdmin = User::withoutGlobalScopes()->firstOrCreate(
-            ['email' => $adminData['email']],
-            [
-                'tenant_id' => $tenant->id,
-                'name' => $adminData['name'],
-                'email' => $adminData['email'],
-                'password' => Hash::make($adminData['password']),
-            ]
-        );
-
-        // 如果使用者是新建立的，需要指派角色
-        if ($tenantAdmin->wasRecentlyCreated) {
-            // 清除既有角色，避免重複
-            $tenantAdmin->roles()->detach();
-
-            // 切換到目前租戶的團隊ID，確保角色指派正確
-            setPermissionsTeamId($tenant->id);
-            $tenantAdmin->assignRole($tenantAdminRole);
-
-            $stats['tenant_admins_created']++;
-            $this->command->line("  ✓ 建立租戶管理員：{$adminData['name']} ({$adminData['email']})");
-        } else {
-            $stats['tenant_admins_reused']++;
-            $this->command->line("  租戶管理員已存在，重用：{$adminData['email']}");
-        }
-
-        return $tenantAdmin;
-    }
-
-    /**
-     * 為租戶建立客戶，使用自然的email格式（不同租戶使用不同域名確保全域唯一）
-     */
-    protected function createTenantCustomers(string $tenantKey, Tenant $tenant, array &$stats): array
-    {
-        $customers = [];
-        $emailDomains = [
-            'retail' => 'retail-demo.example',
-            'coffee' => 'coffee-demo.example',
-            'fitness' => 'fitness-demo.example',
-        ];
-        $emailDomain = $emailDomains[$tenantKey];
-        $customerData = $this->tenantCustomerData[$tenantKey] ?? [];
-
-        foreach ($customerData as $customerInfo) {
-            $fullEmail = $customerInfo['email'] . '@' . $emailDomain;
-
-            /** @var Customer $customer */
-            $customer = Customer::firstOrCreate(
-                ['tenant_id' => $tenant->id, 'email' => $fullEmail],
-                [
-                    'tenant_id' => $tenant->id,
-                    'name' => $customerInfo['name'],
-                    'email' => $fullEmail,
-                    'phone' => $customerInfo['phone'],
-                ]
-            );
-
-            if ($customer->wasRecentlyCreated) {
-                $stats['customers_created']++;
-                $this->command->line("    ✓ 建立客戶：{$customer->name} ({$fullEmail})");
-            }
-
-            $customers[] = $customer;
-        }
+        $this->command->line("  取得租戶現有客戶：共 {$customers->count()} 位客戶");
 
         return $customers;
     }
+
+
 
     /**
      * 為租戶建立符合產業特性的活動與活動獎勵
@@ -557,7 +347,7 @@ class RewardSeeder extends Seeder
     /**
      * 根據配置發放獎勵，營造不同的會員狀態
      */
-    protected function grantRewardsToCustomers(string $tenantKey, Tenant $tenant, array $customers, array $campaigns, array &$stats): void
+    protected function grantRewardsToCustomers(string $tenantKey, Tenant $tenant, \Illuminate\Database\Eloquent\Collection $customers, array $campaigns, array &$stats): void
     {
         $grantConfig = $this->tenantGrantConfigs[$tenantKey] ?? [];
 
@@ -631,7 +421,7 @@ class RewardSeeder extends Seeder
     /**
      * 為活躍會員建立歷史點數交易，形成時間軸
      */
-    protected function createHistoricalTransactions(string $tenantKey, Tenant $tenant, array $customers, array &$stats): void
+    protected function createHistoricalTransactions(string $tenantKey, Tenant $tenant, \Illuminate\Database\Eloquent\Collection $customers, array &$stats): void
     {
         $transactionData = $this->historicalTransactions[$tenantKey] ?? [];
         if (empty($transactionData)) {
@@ -718,10 +508,6 @@ class RewardSeeder extends Seeder
     {
         $this->command->info('Demo資料集建立完成！');
         $this->command->line(str_repeat('=', 60));
-        $this->command->line(sprintf("新增租戶：%d", $stats['tenants_created']));
-        $this->command->line(sprintf("新增租戶管理員：%d", $stats['tenant_admins_created']));
-        $this->command->line(sprintf("重用租戶管理員：%d", $stats['tenant_admins_reused']));
-        $this->command->line(sprintf("新增客戶：%d", $stats['customers_created']));
         $this->command->line(sprintf("新增活動：%d", $stats['campaigns_created']));
         $this->command->line(sprintf("新增獎勵：%d", $stats['rewards_created']));
         $this->command->line(sprintf("成功發放：%d", $stats['grants_success']));
