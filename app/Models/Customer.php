@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Customer extends Model
 {
     use BelongsToTenant;
+
     protected $fillable = [
         'tenant_id',
         'name',
@@ -26,17 +27,17 @@ class Customer extends Model
     ];
 
     /**
-     * 建立Customer時自動生成member_code和qr_token
+     * 建立 Customer 時自動生成 member_code 和 qr_token
      */
     protected static function booted(): void
     {
         static::creating(function ($customer) {
-            // 如果尚未設定member_code，自動生成
-            if (!$customer->member_code) {
+            // 如果尚未設定 member_code，自動生成
+            if (! $customer->member_code) {
                 $customer->member_code = static::generateMemberCode($customer->tenant_id);
             }
-            // 如果尚未設定qr_token，自動生成
-            if (!$customer->qr_token) {
+            // 如果尚未設定 qr_token，自動生成
+            if (! $customer->qr_token) {
                 $customer->qr_token = static::generateQrToken();
             }
         });
@@ -48,7 +49,7 @@ class Customer extends Model
     protected static function generateMemberCode($tenantId): string
     {
         $prefix = 'M';
-        // 使用withoutGlobalScope移除租戶全域範圍，才能正確查詢同一租戶下的所有客戶
+        // 使用 withoutGlobalScope 移除租戶全域範圍，才能正確查詢同一租戶下的所有客戶
         $lastCustomer = static::withoutGlobalScope('tenant')
             ->where('tenant_id', $tenantId)
             ->whereNotNull('member_code')
@@ -58,14 +59,14 @@ class Customer extends Model
         if ($lastCustomer && preg_match('/^M(\d+)$/', $lastCustomer->member_code, $matches)) {
             $nextNumber = intval($matches[1]) + 1;
         } else {
-            $nextNumber = 1001; // 從1001開始
+            $nextNumber = 1001; // 從 1001 開始
         }
 
-        return $prefix . str_pad((string)$nextNumber, 6, '0', STR_PAD_LEFT);
+        return $prefix . str_pad((string) $nextNumber, 6, '0', STR_PAD_LEFT);
     }
 
     /**
-     * 生成隨機的不透明QR令牌
+     * 生成隨機的不透明 QR 令牌
      */
     protected static function generateQrToken(): string
     {
@@ -77,9 +78,20 @@ class Customer extends Model
         return $this->belongsTo(Tenant::class);
     }
 
-    public function pointAccounts(): HasOne
+    /**
+     * 取得客戶的點數帳戶 (一對一關聯)
+     */
+    public function pointAccount(): HasOne
     {
         return $this->hasOne(PointAccount::class);
+    }
+
+    /**
+     * 舊關聯別名 (避免其他地方已使用複數形式造成斷裂)
+     */
+    public function pointAccounts(): HasOne
+    {
+        return $this->pointAccount();
     }
 
     public function pointTransactions(): HasMany

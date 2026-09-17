@@ -3,10 +3,10 @@
 namespace Database\Seeders;
 
 use App\Models\Tenant;
-use Spatie\Permission\Models\Role;
-use Spatie\Permission\Models\Permission;
-use Spatie\Permission\PermissionRegistrar;
 use Illuminate\Database\Seeder;
+use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 
 class RolesAndPermissionsSeeder extends Seeder
 {
@@ -15,34 +15,45 @@ class RolesAndPermissionsSeeder extends Seeder
      */
     public function run(): void
     {
-        // 清除權限快取，避免舊快取導致角色找不到
+        // 1. 清除全域權限快取，確保重新載入
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
         $columnNames = config('permission.column_names');
         $teamForeignKey = $columnNames['team_foreign_key'];
+
+        // 平台級（全域）Super Admin 採用的 Default Team ID（通常為 null 或 0，視 config 決定）
         $globalTeamId = config('permission.default_team_id', 0);
 
-        // 1. 建立平台級 Super Admin 角色 - 先切換到全域團隊ID
-        setPermissionsTeamId($globalTeamId);
-        $superAdmin = Role::firstOrCreate(
-            ['name' => 'super_admin', 'guard_name' => 'web', $teamForeignKey => $globalTeamId],
-            [$teamForeignKey => $globalTeamId]
-        );
-        // Super Admin 同步所有權限
-        $superAdmin->syncPermissions(Permission::all());
-
-        // 2. 預先建立所有權限（確保每個團隊都能找到這些權限）
+        // 2. 預先建立全域基礎權限（Permissions 在 Spatie Teams 中建議維持 Global，不綁定特定 team_id）
         $this->ensurePermissionsExist();
 
-        // 3. 為每個現有的 Tenant 建立專屬的角色
+        // 3. 建立平台級 Super Admin 角色 (Platform Level)
+        setPermissionsTeamId($globalTeamId);
+
+        $superAdmin = Role::firstOrCreate(
+            [
+                'name' => 'super_admin',
+                'guard_name' => 'web',
+                $teamForeignKey => $globalTeamId,
+            ]
+        );
+
+        // Super Admin 同步全域所有權限
+        $superAdmin->syncPermissions(Permission::all());
+
+        // 4. 為每個現有的 Tenant 獨立建立角色與權限分配 (Tenant Scoped)
         $tenants = Tenant::all();
+
         foreach ($tenants as $tenant) {
-            $this->createTenantRolesAndPermissions($tenant->id);
+            $this->createTenantRolesAndPermissions($tenant->id, $teamForeignKey);
         }
+
+        // 5. 結束後重設 Team ID Context，避免影響後續 Seeder 或 HTTP Request
+        setPermissionsTeamId($globalTeamId);
     }
 
     /**
-     * 確保所有基本權限都已建立
+     * 確保所有基本權限都已存在 (Global Permissions)
      */
     private function ensurePermissionsExist(): void
     {
@@ -77,33 +88,36 @@ class RolesAndPermissionsSeeder extends Seeder
     }
 
     /**
-     * 為特定 Tenant 建立專屬的角色和權限
+     * 為特定 Tenant 建立專屬的角色與配置權限
      */
-    private function createTenantRolesAndPermissions(int $tenantId): void
+    private function createTenantRolesAndPermissions(int $tenantId, string $teamForeignKey): void
     {
-        $columnNames = config('permission.column_names');
-        $teamForeignKey = $columnNames['team_foreign_key'];
-
-        // 切換到當前租戶的團隊ID
+        // 切換 Spatie Permission 的當前團隊上下文
         setPermissionsTeamId($tenantId);
 
-        // 建立該租戶專屬的 tenant_admin 角色（必須包含 team_id 在查找條件中）
+        // 建立該租戶專屬的 tenant_admin 角色
         $tenantAdmin = Role::firstOrCreate(
-            ['name' => 'tenant_admin', 'guard_name' => 'web', $teamForeignKey => $tenantId],
-            [$teamForeignKey => $tenantId]
+            [
+                'name' => 'tenant_admin',
+                'guard_name' => 'web',
+                $teamForeignKey => $tenantId,
+            ]
         );
 
         // 建立該租戶專屬的 tenant_staff 角色
         $tenantStaff = Role::firstOrCreate(
-            ['name' => 'tenant_staff', 'guard_name' => 'web', $teamForeignKey => $tenantId],
-            [$teamForeignKey => $tenantId]
+            [
+                'name' => 'tenant_staff',
+                'guard_name' => 'web',
+                $teamForeignKey => $tenantId,
+            ]
         );
 
-        // 為該租戶的 admin 同步所有權限
+        // 為該租戶的 tenant_admin 角色綁定所有可用權限
         $tenantAdmin->syncPermissions(Permission::all());
 
-        // 為該租戶的 staff 同步基本檢視權限
-        $basicPermissions = Permission::whereIn('name', [
+        // 為該租戶的 tenant_staff 角色綁定基本檢視權限
+        $basicPermissionNames = [
             'ViewAny::Customer',
             'View::Customer',
             'ViewAny::PointTransaction',
@@ -112,8 +126,9 @@ class RolesAndPermissionsSeeder extends Seeder
             'View::PointAccount',
             'ViewAny::Reward',
             'View::Reward',
-        ])->get();
+        ];
 
+        $basicPermissions = Permission::whereIn('name', $basicPermissionNames)->get();
         $tenantStaff->syncPermissions($basicPermissions);
     }
 }
