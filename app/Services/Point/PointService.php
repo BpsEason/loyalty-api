@@ -4,6 +4,7 @@ namespace App\Services\Point;
 
 use App\Models\Customer;
 use App\Models\PointAccount;
+use App\Models\PointLot;
 use App\Models\PointTransaction;
 use App\Support\Tenancy\TenantResolver;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -17,12 +18,12 @@ class PointService
     /**
      * 嘗試取得鎖的最長等待時間（秒）
      */
-    protected int $lockWaitSeconds = 5;
+    protected int $lockWaitSeconds = 10;
 
     /**
-     * 鎖定自動釋放 TTL（秒）
+     * 鎖定自動釋放 TTL（秒）- 延長至20秒避免鎖過早釋放
      */
-    protected int $lockTTL = 10;
+    protected int $lockTTL = 20;
 
     public function __construct(protected TenantResolver $tenantResolver) {}
 
@@ -64,9 +65,10 @@ class PointService
     protected function executeInLock(Customer $customer, callable $callback): PointTransaction
     {
         $lockKey = $this->getLockKey($customer);
-        $lock = Cache::lock($lockKey, $this->lockTTL);
 
         try {
+            $lock = Cache::lock($lockKey, $this->lockTTL);
+
             // 使用 block 自旋等待，自動處理鎖釋放
             return $lock->block($this->lockWaitSeconds, function () use ($customer, $callback) {
                 // 加入 3 次重試處理短暫的資料庫死鎖
@@ -77,6 +79,15 @@ class PointService
             });
         } catch (LockTimeoutException $e) {
             throw new RuntimeException('系統繁忙，請稍後再試', 0, $e);
+        } catch (\Exception $e) {
+            // Redis連接故障降級：依賴資料庫行鎖保證一致性
+            report($e); // 記錄Redis故障日誌
+
+            // 即使Redis不可用，仍然依賴資料庫的lockForUpdate行鎖來保護一致性
+            return DB::transaction(function () use ($customer, $callback) {
+                $account = $this->getOrCreatePointAccount($customer);
+                return $callback($account);
+            }, 3);
         }
     }
 
@@ -144,6 +155,8 @@ class PointService
 
     /**
      * 為客戶新增點數
+     * 
+     * 實現Point Lot FIFO：建立新的點數批次，與餘額更新在同一事務中完成
      */
     public function earn(Customer $customer, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
     {
@@ -153,12 +166,14 @@ class PointService
             $balanceBefore = $account->balance;
             $balanceAfter = $balanceBefore + $amount;
 
+            // 更新帳戶餘額
             $account->update([
                 'balance' => $balanceAfter,
                 'total_earned' => $account->total_earned + $amount,
             ]);
 
-            return $this->createTransaction(
+            // 建立交易記錄
+            $transaction = $this->createTransaction(
                 PointTransaction::TYPE_EARN,
                 $account,
                 $amount,
@@ -168,15 +183,28 @@ class PointService
                 $reference,
                 $createdBy
             );
+
+            // 建立Point Lot（在同一事務中）
+            PointLot::create([
+                'tenant_id' => $account->tenant_id,
+                'customer_id' => $account->customer_id,
+                'point_account_id' => $account->id,
+                'original_points' => $amount,
+                'remaining_points' => $amount,
+                'earned_at' => now(),
+                'expired_at' => null, // 可由後續排程設定過期時間
+                'origin_transaction_id' => $transaction->id,
+            ]);
+
+            return $transaction;
         });
     }
 
     /**
      * 客戶兌換點數
      * 
-     * 最重要的並發敏感操作，使用雙重檢查保證餘額不會為負：
-     * 1. 行鎖確保串行化讀取
-     * 2. 資料庫更新條件 WHERE balance >= amount 作為最終保險
+     * 實現Point Lot FIFO消耗：按earned_at + id的確定性順序消耗點數批次
+     * 保持原有的並發安全機制：Redis鎖 + DB行鎖 + 雙重餘額檢查
      */
     public function redeem(Customer $customer, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
     {
@@ -188,12 +216,37 @@ class PointService
             }
 
             $balanceBefore = $account->balance;
+            $remainingToDeduct = $amount;
+
+            // FIFO: 游標式消費，每次只鎖定當前需要的批次，降低死鎖風險
+            while ($remainingToDeduct > 0) {
+                $lot = $account->pointLots()
+                    ->where('remaining_points', '>', 0)
+                    ->whereNull('expired_at')
+                    ->orderBy('earned_at', 'asc')
+                    ->orderBy('id', 'asc')
+                    ->lockForUpdate() // 只鎖定當前批次
+                    ->first();
+
+                if (!$lot) {
+                    throw new RuntimeException('點數批次不足，無法完成兌換');
+                }
+
+                $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
+                $lot->update([
+                    'remaining_points' => $lot->remaining_points - $deductFromLot
+                ]);
+                $remainingToDeduct -= $deductFromLot;
+            }
+
+            // 必須確保所有要扣除的點數都已從批次中消耗完畢
+            if ($remainingToDeduct > 0) {
+                throw new RuntimeException('點數批次不足，無法完成兌換');
+            }
+
             $balanceAfter = $balanceBefore - $amount;
 
-            // The database condition is intentionally retained as a second
-            // concurrency guard even though the account row is locked above.
-            // This provides defense-in-depth against any scenario where the
-            // row lock might not be properly held.
+            // 保持原有的資料庫層級雙重保險
             $updated = $account->where('id', $account->id)
                 ->where('balance', '>=', $amount)
                 ->update([
@@ -238,28 +291,60 @@ class PointService
                 throw new RuntimeException('調整後點數不可為負數');
             }
 
+            $absAmount = abs($amount);
             $updateData = ['balance' => $balanceAfter];
 
             if ($amount > 0) {
                 $updateData['total_earned'] = $account->total_earned + $amount;
             } else {
-                $updateData['total_redeemed'] = $account->total_redeemed + abs($amount);
+                $updateData['total_redeemed'] = $account->total_redeemed + $absAmount;
             }
 
-            // 如果是扣減點數，使用where條件確保餘額足夠，同樣的 defense-in-depth 策略
+            // 負數調整：需要使用FIFO消耗點數批次
             if ($amount < 0) {
-                $updated = $account->where('id', $account->id)
-                    ->where('balance', '>=', abs($amount))
-                    ->update($updateData);
+                $remainingToDeduct = $absAmount;
 
+                // FIFO: 按earned_at ASC, id ASC排序，確保完全確定性的消耗順序
+                $lots = $account->pointLots()
+                    ->where('remaining_points', '>', 0)
+                    ->whereNull('expired_at')
+                    ->orderBy('earned_at', 'asc')
+                    ->orderBy('id', 'asc')
+                    ->lockForUpdate()
+                    ->get();
+
+                // 依序消耗每個批次的點數
+                foreach ($lots as $lot) {
+                    if ($remainingToDeduct <= 0) {
+                        break;
+                    }
+
+                    $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
+                    $lot->update([
+                        'remaining_points' => $lot->remaining_points - $deductFromLot
+                    ]);
+                    $remainingToDeduct -= $deductFromLot;
+                }
+
+                // 必須確保所有要扣除的點數都已從批次中消耗完畢
+                if ($remainingToDeduct > 0) {
+                    throw new RuntimeException('點數批次不足，無法完成調整');
+                }
+
+                // 使用where條件確保餘額足夠，同樣的 defense-in-depth 策略
+                $updated = $account->where('id', $account->id)
+                    ->where('balance', '>=', $absAmount)
+                    ->update($updateData);
                 if ($updated === 0) {
                     throw new RuntimeException('點數餘額不足，交易失敗');
                 }
             } else {
+                // 正數調整：更新帳戶餘額
                 $account->update($updateData);
             }
 
-            return $this->createTransaction(
+            // 建立交易記錄
+            $transaction = $this->createTransaction(
                 PointTransaction::TYPE_ADJUST,
                 $account,
                 $amount,
@@ -269,6 +354,22 @@ class PointService
                 $reference,
                 $createdBy
             );
+
+            // 正數調整需要建立新的PointLot
+            if ($amount > 0) {
+                PointLot::create([
+                    'tenant_id' => $account->tenant_id,
+                    'customer_id' => $account->customer_id,
+                    'point_account_id' => $account->id,
+                    'original_points' => $amount,
+                    'remaining_points' => $amount,
+                    'earned_at' => now(),
+                    'expired_at' => null,
+                    'origin_transaction_id' => $transaction->id,
+                ]);
+            }
+
+            return $transaction;
         });
     }
 
@@ -323,7 +424,8 @@ class PointService
                 'balance' => $balanceAfter,
             ]);
 
-            return $this->createTransaction(
+            // 建立交易記錄
+            $transaction = $this->createTransaction(
                 PointTransaction::TYPE_REFUND,
                 $account,
                 $amount,
@@ -333,14 +435,28 @@ class PointService
                 $reference,
                 $createdBy
             );
+
+            // 退款成功時建立新的PointLot（不恢復原有的已消耗批次，保持歷史可追蹤性）
+            PointLot::create([
+                'tenant_id' => $account->tenant_id,
+                'customer_id' => $account->customer_id,
+                'point_account_id' => $account->id,
+                'original_points' => $amount,
+                'remaining_points' => $amount,
+                'earned_at' => now(),
+                'expired_at' => null,
+                'origin_transaction_id' => $transaction->id,
+            ]);
+
+            return $transaction;
         });
     }
 
     /**
      * 點數過期
      * 
-     * 獨立的過期操作，保持 domain intent 清晰
-     * 不影響 total_redeemed，因為過期不是用戶主動兌換
+     * 與Point Lot系統整合：找到最舊的未過期批次，標記為過期並扣除相應點數
+     * 保持原有的過期語義，同時實現批次級別的過期管理
      */
     public function expire(Customer $customer, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
     {
@@ -352,9 +468,39 @@ class PointService
             }
 
             $balanceBefore = $account->balance;
+            $remainingToExpire = $amount;
+
+            // 同樣按FIFO順序處理過期，先過期最早獲得的點數
+            $lots = $account->pointLots()
+                ->where('remaining_points', '>', 0)
+                ->whereNull('expired_at')
+                ->orderBy('earned_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($lots as $lot) {
+                if ($remainingToExpire <= 0) {
+                    break;
+                }
+
+                $expireFromLot = min($lot->remaining_points, $remainingToExpire);
+                $lot->update([
+                    'remaining_points' => $lot->remaining_points - $expireFromLot,
+                    // 如果整個批次的點數都過期了，設定expired_at
+                    'expired_at' => ($lot->remaining_points - $expireFromLot) <= 0 ? now() : $lot->expired_at,
+                ]);
+                $remainingToExpire -= $expireFromLot;
+            }
+
+            // 必須確保所有要過期的點數都已從批次中消耗完畢
+            if ($remainingToExpire > 0) {
+                throw new RuntimeException('點數批次不足，無法完成過期處理');
+            }
+
             $balanceAfter = $balanceBefore - $amount;
 
-            // 同樣使用資料庫條件作為雙重保險
+            // 保持資料庫層級的雙重保險
             $updated = $account->where('id', $account->id)
                 ->where('balance', '>=', $amount)
                 ->update(['balance' => $balanceAfter]);

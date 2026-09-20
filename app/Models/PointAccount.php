@@ -38,4 +38,9 @@ class PointAccount extends Model
     {
         return $this->hasMany(PointTransaction::class);
     }
+
+    public function pointLots(): HasMany
+    {
+        return $this->hasMany(PointLot::class);
+    }
 }

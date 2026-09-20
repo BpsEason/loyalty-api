@@ -16,7 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'tenant' => \App\Http\Middleware\TenantMiddleware::class,
-            'idempotent' => \App\Http\Middleware\IdempotencyMiddleware::class,
+            'idempotent' => \App\Http\Middleware\DatabaseIdempotencyMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

@@ -133,9 +133,10 @@ class ExternalSystemIntegrationTest extends TestCase
             'reference' => 'ORDER-12345',
         ]);
 
-        $secondResponse->assertStatus(200)
+        $secondResponse->assertStatus(201)
             ->assertJson([
-                'message' => 'Point transaction retrieved (idempotent)',
+                'message' => '點數交易已取回（冪等性重試）',
+                'idempotent' => true,
             ]);
         $this->assertEquals($transactionId, $secondResponse->json('data.id'));
     }

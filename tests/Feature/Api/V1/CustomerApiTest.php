@@ -66,6 +66,18 @@ class CustomerApiTest extends TestCase
             'total_redeemed' => 0,
         ]);
 
+        // 建立對應的點數批次，確保SUM(remaining_points) == balance
+        \App\Models\PointLot::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'point_account_id' => $this->pointAccountA->id,
+            'original_points' => 1000,
+            'remaining_points' => 1000,
+            'earned_at' => now(),
+            'expired_at' => null,
+            'origin_transaction_id' => null,
+        ]);
+
         // 建立租戶B
         $this->tenantB = Tenant::create([
             'name' => 'Tenant B',
@@ -96,6 +108,18 @@ class CustomerApiTest extends TestCase
             'balance' => 1000,
             'total_earned' => 1000,
             'total_redeemed' => 0,
+        ]);
+
+        // 建立對應的點數批次，確保SUM(remaining_points) == balance
+        \App\Models\PointLot::create([
+            'tenant_id' => $this->tenantB->id,
+            'customer_id' => $this->customerB->id,
+            'point_account_id' => $this->pointAccountB->id,
+            'original_points' => 1000,
+            'remaining_points' => 1000,
+            'earned_at' => now(),
+            'expired_at' => null,
+            'origin_transaction_id' => null,
         ]);
     }
 
@@ -390,7 +414,7 @@ class CustomerApiTest extends TestCase
             'amount' => 300,
         ]);
 
-        $response2->assertOk();
+        $response2->assertStatus(201);
 
         // 驗證只扣了一次點數
         $this->pointAccountA->refresh();
