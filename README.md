@@ -266,35 +266,60 @@ Controller 不應包含核心點數交易規則。
 
 透過 `tenant_id` 區分不同租戶。
 
+## 實作細節
+
+- **BelongsToTenant Trait**：所有需要租戶隔離的 Model 都使用此 Trait
+- **Global Scope**：自動在所有查詢中加入 `tenant_id` 過濾（Super Admin 除外）
+- **TenantResolver**：解析當前請求的租戶上下文
+- **TenantContext**：儲存當前請求的租戶實例，全程維護租戶隔離
+
+## 角色權限
+
+### Super Admin
+
+- `tenant_id = null`，不屬於任何租戶
+- 自動 bypass 所有租戶限制，可管理全部 Tenant
+- 可跨 Tenant 查看所有資料
+- 不會被錯誤限制在任何單一租戶
+
+### Tenant Admin
+
+- `tenant_id` 綁定所屬租戶
+- 僅能操作自己 Tenant 的所有資源
+- 擁有該租戶下所有權限
+
+### Tenant Staff
+
+- `tenant_id` 綁定所屬租戶
+- 僅有唯讀權限，可查看但無法修改刪除資料
+
+## 資料模型關係
+
 ```text
-Tenant A
-   │
-   ├── Customers
-   ├── Point Accounts
-   └── Point Transactions
-
-
-Tenant B
-   │
-   ├── Customers
-   ├── Point Accounts
-   └── Point Transactions
+Tenant
+ ├── Users (系統使用者：Admin/Staff)
+ ├── Customers (會員客戶)
+ │    └── PointAccount (每個客戶一個點數帳戶)
+ │         └── PointTransactions (所有點數交易明細)
+ ├── Campaigns (行銷活動)
+ │    └── CampaignRewards (活動可兌換獎勵)
+ │         └── RewardGrants (實際發放的獎勵記錄)
 ```
 
-Tenant Isolation 不應只依賴 Controller。
+所有上層實體都有 `tenant_id`，下層實體透過關聯繼承租戶隔離，配合 Global Scope 確保跨租戶資料無法存取。
 
-整體概念：
+## 隔離流程
 
 ```text
 Authentication
        ↓
-Tenant Context
+Tenant Context Resolve
        ↓
-Authorization
+Authorization Check
        ↓
-Model / Query Scope
+Model Global Scope 自動套用
        ↓
-Database Constraints
+Database Constraints 最終防線
 ```
 
 核心原則：
@@ -353,27 +378,42 @@ Point System 是本專案最需要保護資料一致性的核心模組。
 - Adjust
 - Expire
 
-基本流程：
+## 點數操作實際流程
+
+根據程式碼中 `PointService` 的實作，每筆點數交易都會經過以下流程：
 
 ```text
-Request
-   ↓
-Point Service
-   ↓
-Concurrency Control
-   ↓
-Database Transaction
-   ↓
-Lock Point Account Row
-   ↓
-Validate Balance
-   ↓
-Update Balance
-   ↓
-Create Transaction Ledger
-   ↓
-Commit
+API Request
+    ↓
+Controller 接收請求
+    ↓
+PointService 進入核心邏輯
+    ↓
+Redis Lock (Cache::lock) 取得跨實例鎖
+    ↓
+lock->block() 自旋等待最多 5 秒
+    ↓
+DB::transaction() 開啟資料庫交易 (3 次死鎖重試)
+    ↓
+PointAccount::lockForUpdate() 取得資料庫行鎖
+    ↓
+驗證租戶一致性、餘額合法性
+    ↓
+更新 PointAccount 餘額與累計數據
+    ↓
+建立 PointTransaction 交易明細
+    ↓
+Commit 交易
+    ↓
+回傳交易結果給 Client
 ```
+
+## 並發保護機制
+
+- Redis Distributed Lock：避免多個 Application Instance 同時操作同一客戶
+- Database Row Lock (`lockForUpdate()`)：確保同一時間只有一個交易能修改餘額
+- SQL 層級餘額檢查：`WHERE balance >= amount` 作為最後一道防線
+- Unique Constraint：處理並發建立 PointAccount 的競爭狀況
 
 Controller 不負責點數交易規則。
 
@@ -608,13 +648,24 @@ Redeem 100
 
 同一個業務操作可能被執行兩次。
 
-Client 可以提供：
+## 目前實作狀態
 
-```http
-Idempotency-Key: 8f3a...
-```
+### 已完成的基礎實作
 
-系統透過 Idempotency Key 判斷同一業務 Request 是否已經被處理。
+- ✅ `IdempotencyMiddleware` 中介層已實作
+- ✅ 支援 Request Header `Idempotency-Key`
+- ✅ 僅套用到 POST 請求
+- ✅ 使用 Redis 快取成功回應 24 小時
+- ✅ 已套用到需要冪等性的 API 端點：
+    - `POST /api/v1/customers/{customer}/point-transactions`
+    - `POST /api/v1/customers/{customer}/points/redeem`
+- ✅ 支援租戶隔離的冪等性鍵，避免跨租戶鍵碰撞
+
+### 仍需完善的部分
+
+- 🚧 尚未實作資料庫級別的冪等性儲存表
+- ⚠️ 僅依賴 Redis 快取，若 Redis 清除可能發生重複執行
+- ⚠️ 尚未完整處理所有邊界案例與錯誤重試場景
 
 Concurrency 與 Idempotency 解決不同問題：
 
@@ -628,6 +679,8 @@ Idempotency
 ```
 
 兩者需要同時存在，不能互相取代。
+
+目前：**In Progress**
 
 ---
 
@@ -765,22 +818,74 @@ Point Business Logic 仍由 Service Layer 負責。
 
 # 📁 Project Structure
 
-目前使用 Laravel 標準結構與業務責任分層：
+根據實際程式碼的目錄結構：
 
 ```text
 app/
+├── Console/
+├── Filament/                          # Filament Admin Panel
+│   ├── Concerns/
+│   ├── Resources/                     # 所有 Filament Resource
+│   │   ├── TenantResource/
+│   │   ├── UserResource/
+│   │   ├── CustomerResource/
+│   │   ├── PointAccountResource/
+│   │   ├── PointTransactionResource/
+│   │   ├── CampaignResource/
+│   │   ├── CampaignRewardResource/
+│   │   ├── RewardGrantResource/
+│   │   └── Roles/
+│   └── Widgets/                       # Dashboard Widgets
+│       ├── OverviewStatsWidget.php
+│       ├── PointTrendWidget.php
+│       ├── CustomerGrowthWidget.php
+│       ├── CampaignOverviewWidget.php
+│       ├── RewardOverviewWidget.php
+│       └── RecentTransactionsWidget.php
 ├── Http/
 │   ├── Controllers/
+│   │   └── Api/
+│   │       └── V1/                    # API v1 控制器
+│   │           ├── AuthController.php
+│   │           ├── CustomerController.php
+│   │           ├── PointAccountController.php
+│   │           └── PointTransactionController.php
+│   ├── Middleware/                    # 中介層
+│   │   ├── IdempotencyMiddleware.php
+│   │   ├── TenantMiddleware.php
+│   │   └── ...
 │   ├── Requests/
+│   │   └── Api/
+│   │       └── V1/                    # FormRequest 驗證
 │   └── Resources/
-│
+│       └── Api/
+│           └── V1/                    # API Resource 轉換
 ├── Models/
-│
+│   ├── Concerns/
+│   │   └── BelongsToTenant.php        # 租戶隔離 Trait
+│   ├── Tenant.php
+│   ├── User.php
+│   ├── Customer.php
+│   ├── PointAccount.php
+│   ├── PointTransaction.php
+│   ├── Campaign.php
+│   ├── CampaignReward.php
+│   └── RewardGrant.php
+├── Policies/                           # 授權政策
+├── Providers/
+│   └── Filament/
+│       └── AdminPanelProvider.php     # Filament Panel 設定
 ├── Services/
-│
-├── Support/
-│
-└── ...
+│   ├── Point/
+│   │   └── PointService.php           # 點數核心服務
+│   └── Reward/
+│       └── RewardService.php          # 獎勵服務
+└── Support/
+    ├── Api/
+    │   └── ApiResponse.php            # 統一 API 回應格式
+    └── Tenancy/
+        ├── TenantContext.php          # 租戶上下文
+        └── TenantResolver.php         # 租戶解析器
 
 config/
 database/
@@ -790,26 +895,30 @@ storage/
 tests/
 ```
 
-實際目錄與模組以 Repository 為準。
-
-README 不假設 Repository 中不存在的資料夾或功能。
-
 ---
 
 # 🚀 Installation
 
 ## Requirements
 
-基本環境：
+根據 `composer.json` 與 `package.json` 的實際依賴：
 
-| Requirement | Version           |
-| ----------- | ----------------- |
-| PHP         | 8.2+              |
-| Composer    | 2.x               |
-| MySQL       | 8.x               |
-| Redis       | Redis Server      |
-| Node.js     | 依前端 Build 需求 |
-| NPM         | 依 Node.js 版本   |
+- **PHP**: 8.2+ (Laravel 12 要求)
+- **Laravel Framework**: 12.x
+- **MySQL**: 8.0+ (支援 InnoDB、行鎖與複雜查詢)
+- **Redis**: 7.0+ (用於快取、分佈式鎖、冪等性快取)
+- **Node.js**: 20+ / NPM (用於編譯 Filament 前端資源)
+- **Composer**: 2.x
+- **Filament**: 5.8+
+- **Livewire**: 4.4+
+
+## 核心套件依賴
+
+- `tymon/jwt-auth`: API JWT 認證
+- `darkaonline/l5-swagger`: Swagger/OpenAPI 文件
+- `spatie/laravel-permission`: 權限管理
+- `filament/spatie-laravel-permission-plugin`: Filament Shield 權限面板
+- `filament/filament`: 後台管理面板框架
 
 實際 PHP Extensions 需求以：
 
@@ -1107,10 +1216,11 @@ php artisan test --filter=CustomerApiTest
 
 修改核心交易邏輯後，至少應重新驗證相關：
 
-- Point Tests
-- Tenant Isolation Tests
-- Concurrency Tests
-- Idempotency Tests
+- Point Transaction Tests（包含 Earn/Redeem/Refund/Adjust/Expire 邏輯）
+- Tenant Isolation Tests（跨租戶存取隔離）
+- Locking & Transaction Consistency Tests（Redis鎖、資料庫交易、餘額一致性）
+- Sequential Stress Tests（大量順序請求下的資料正確性）
+- Idempotency Tests（基礎Redis中間件已實作，資料庫級冪等性仍在開發）
 
 ---
 
@@ -1534,13 +1644,13 @@ APP_DEBUG=false
 
 # 🧪 Testing Strategy
 
-測試重點不只放在 CRUD。
+測試重點不只放在 CRUD，目前已完成的測試核心能力：
 
 ---
 
 ## Point Correctness
 
-驗證：
+✅ 已完整驗證所有交易類型：
 
 ```text
 Earn
@@ -1550,52 +1660,49 @@ Adjust
 Expire
 ```
 
+所有方法的邊界案例、錯誤處理與資料變更都已透過單元測試驗證。
+
 ---
 
-## Transaction Safety
+## Transaction Safety / Consistency
 
-驗證：
+✅ 已完整驗證交易一致性：
 
 ```text
-Update Balance
-      +
-Create Ledger
+PointAccount Balance
+        +
+PointTransaction Ledger
 ```
 
-兩者必須保持一致。
-
-任何一步失敗：
+兩者必須保持一致。任何一步失敗都會正確觸發：
 
 ```text
 ROLLBACK
 ```
 
+包含餘額不足、參考交易無效等異常情境下的資料回滾邏輯。
+
 ---
 
-## Concurrency
+## Locking / Sequential Stress Testing
 
-例如：
+✅ 已驗證鎖定邏輯與順序壓力情境：
 
-```text
-Initial Balance = 100
+- Redis Lock 正確取得與釋放
+- 資料庫交易與行鎖邏輯
+- 大量順序請求下的點數餘額一致性
+- 並發建立 PointAccount 時的 Unique Constraint 處理
+- Refund/Adjust/Expire 等交易在鎖定保護下的正確性
 
-10 concurrent requests
-Redeem 20
-```
+目前的測試為**同一進程內的鎖保護順序執行測試**，驗證鎖邏輯能防止更新遺失。
 
-預期：
-
-```text
-Success = 5
-Failed  = 5
-Balance = 0
-```
+⚠️ 尚未完整涵蓋：真正的 Multi-process / Multi-worker 並發測試
 
 ---
 
 ## Tenant Isolation
 
-驗證：
+✅ 已完整驗證租戶隔離：
 
 ```text
 Tenant A
@@ -1610,21 +1717,15 @@ Tenant A 不應取得 Tenant B 的：
 - Point Transaction
 - Point Operation
 
+包含中間件層級的授權阻擋與全域查詢範圍的自動過濾。
+
 ---
 
 ## Idempotency
 
-驗證：
+🚧 僅基礎實作，尚未完整驗證：
 
-```text
-Same Idempotency-Key
-        +
-Same Business Request
-        ↓
-Must not execute twice
-```
-
-同時驗證不同 Tenant 使用相同 Idempotency-Key 時，不會互相污染。
+目前僅實作基礎的 Redis Middleware 快取機制，資料庫級冪等性儲存、完整重試處理邊界案例仍在開發中。
 
 ---
 
@@ -1821,14 +1922,16 @@ README 的 Project Status 必須跟實際 Code、Test 與 Runtime Behavior 保�
 
 而是依照實際問題逐步演進。
 
-| Phase   | Focus                                                                    | Status          |
-| ------- | ------------------------------------------------------------------------ | --------------- |
-| Phase 1 | Multi-Tenant / JWT / Customer / Point Account / Ledger / Base API        | **Implemented** |
-| Phase 2 | Redis Lock / DB Row Lock / Transaction / Idempotency / Concurrency Tests | **In Progress** |
-| Phase 3 | Point Lot / FIFO / Point Expiration / Batch Job                          | **Planned**     |
-| Phase 4 | Domain Events / Queue / Event-Driven Processing                          | **Planned**     |
-| Phase 5 | Outbox Pattern / Webhook / Retry / Signature Verification                | **Planned**     |
-| Phase 6 | Tenant-aware Rate Limiting / Observability / Scalability                 | **Planned**     |
+| Phase   | Focus                                                                                             | Status          |
+| ------- | ------------------------------------------------------------------------------------------------- | --------------- |
+| Phase 1 | Multi-Tenant / JWT / Customer / Point Account / Ledger / Base API                                 | **Implemented** |
+| Phase 2 | Redis Lock / DB Row Lock / Transaction / Idempotency / Concurrency Tests                          | **In Progress** |
+|         | _已完成：Redis Lock、DB Row Lock、Database Transaction、Lock-protected Sequential Stress Testing_ |                 |
+|         | _進行中：完整Idempotency（僅基礎Redis Middleware完成）、真正的Multi-process/Multi-worker並發測試_ |                 |
+| Phase 3 | Point Lot / FIFO / Point Expiration / Batch Job                                                   | **Planned**     |
+| Phase 4 | Domain Events / Queue / Event-Driven Processing                                                   | **Planned**     |
+| Phase 5 | Outbox Pattern / Webhook / Retry / Signature Verification                                         | **Planned**     |
+| Phase 6 | Tenant-aware Rate Limiting / Observability / Scalability                                          | **Planned**     |
 
 ---
 
@@ -2039,63 +2142,115 @@ Queue / Event
 
 ---
 
-# 📌 Current Project Status
+# 📊 Current Project Status
 
-目前已建立的核心能力：
+## ✅ Completed
 
-```text
-Multi-Tenant Architecture
-        ↓
-JWT API Authentication
-        ↓
-Versioned REST API
-        ↓
-Customer
-        ↓
-Point Account
-        ↓
-Point Transaction / Ledger
-        ↓
-Redis Distributed Lock
-        ↓
-Database Transaction
-        ↓
-Database Row Lock
-        ↓
-Tenant Isolation
-        ↓
-API Documentation
-```
+### Multi-Tenant Architecture
 
-目前正在持續驗證與完善：
+- ✅ Tenant Model 實作
+- ✅ `BelongsToTenant` Trait + Global Scope 自動租戶隔離
+- ✅ TenantResolver + TenantContext 租戶上下文管理
+- ✅ Super Admin (tenant_id = null) 可跨租戶存取所有資料
+- ✅ Tenant Admin / Tenant Staff 僅能存取所屬租戶資料
+- ✅ API 與 Filament Admin Panel 皆支援租戶隔離
+- ✅ Super Admin 不會被錯誤限制在單一租戶
 
-```text
-Concurrency
-      ↓
-Idempotency
-      ↓
-Tenant Isolation
-      ↓
-Transaction Consistency
-```
+### Point System
 
-後續規劃：
+- ✅ 支援 5 種交易類型：Earn / Redeem / Refund / Adjust / Expire
+- ✅ PointAccount 儲存餘額與累計數據 (balance / total_earned / total_redeemed)
+- ✅ PointTransaction 完整交易明細帳本，支援多態關聯 reference
+- ✅ 交易原子性：所有點數操作皆在 DB Transaction 中執行
+- ✅ 租戶隔離：所有 Point 相關 Model 皆套用租戶全域作用域
+- ✅ 客戶隔離：操作前驗證客戶與當前租戶一致性
 
-```text
-Point Lot / FIFO
-      ↓
-Domain Events
-      ↓
-Queue
-      ↓
-Outbox
-      ↓
-Webhook
-      ↓
-Rate Limiting
-      ↓
-Observability
-```
+### Concurrency / Consistency
+
+- ✅ Redis Distributed Lock (Cache::lock) 跨實例同步
+- ✅ Database Transaction + lockForUpdate() 行鎖
+- ✅ SQL 層級餘額檢查 (WHERE balance >= amount) 作為深度防禦
+- ✅ Unique Constraint 處理並發建立 PointAccount 的競爭
+- ✅ 3 次重試機制處理短暫資料庫死鎖
+- ✅ 測試包含：交易一致性、鎖定邏輯、順序壓力情境驗證
+- ⚠️ 真正的多進程 / 多 worker 並發測試仍為後續強化項目
+
+### Authentication & Authorization
+
+- ✅ API: JWT Authentication (tymon/jwt-auth)
+- ✅ Admin Panel: Filament Session Authentication
+- ✅ Spatie Permission + Filament Shield 權限管理
+- ✅ 角色系統：`super_admin` / `tenant_admin` / `tenant_staff`
+- ✅ Super Admin 自動 bypass 所有租戶限制
+- ✅ Policies 資源層級授權控制
+
+### Filament Admin Panel
+
+- ✅ 平台管理：Tenant / User / Roles
+- ✅ 會員管理：Customer / PointAccount / PointTransaction
+- ✅ 獎勵管理：Campaign / CampaignReward / RewardGrant
+- ✅ 全數 Resource 皆支援租戶自動隔離
+- ✅ Dashboard Widgets：OverviewStats / PointTrend / CustomerGrowth / CampaignOverview / RewardOverview / RecentTransactions
+- ✅ Super Admin Dashboard 顯示跨租戶統計，Tenant User 僅顯示所屬租戶數據
+
+### API
+
+- ✅ 版本化 RESTful API (v1)
+- ✅ API 路由包含：Auth / Customers / PointAccounts / PointTransactions / QR Code / POS Scan
+- ✅ Swagger/OpenAPI 文件 (darkaonline/l5-swagger)，使用 OpenApi Attributes 定義
+- ✅ Swagger UI 路徑：`/api/documentation`
+- ✅ FormRequest 輸入驗證 + API Resource 資源轉換
+- ✅ 統一 API Response 格式
+
+### Database & Seeders
+
+- ✅ 完整 Migration 定義所有資料表結構
+- ✅ Demo Seeder 建立：
+    - Super Admin: `superadmin@example.com` / `password123`
+    - Demo Tenants: `coffee.localhost` (Demo Coffee), `fitness.localhost` (Demo Fitness)
+    - Tenant Admin: `admin-a@example.com`, `admin-b@example.com` / `password123`
+    - Demo Customers / PointAccounts / 歷史交易數據
+- ✅ 執行 `php artisan db:seed` 即可建立完整示範環境
+
+### Testing
+
+- ✅ Unit Tests
+- ✅ Feature Tests：
+    - API 測試 (CustomerApiTest)
+    - 認證測試 (AuthApiTest)
+    - 租戶隔離測試 (TenantIsolationTest)
+    - Super Admin 行為測試 (SuperAdminTenantTest)
+    - Tenant Admin 權限測試 (TenantAdminPermissionTest)
+    - Point Service Locking / Transaction Consistency Tests (PointTransactionConcurrencyTest)
+        - 驗證所有點數交易類型(Earn/Redeem/Refund/Adjust/Expire)的正確性
+        - 驗證餘額與交易明細的一致性
+        - 驗證Redis鎖、資料庫交易與行鎖邏輯
+        - 驗證大量順序請求下的資料正確性(Sequential Stress)
+        - 驗證PointAccount並發建立的競爭處理
+    - 獎勵引擎測試 (RewardEngineTest)
+
+## 🚧 In Progress
+
+### Idempotency
+
+- 🚧 已實作基礎 IdempotencyMiddleware，支援 `Idempotency-Key` Header
+- 🚧 使用 Redis 快取成功回應 24 小時避免重複執行
+- ⚠️ 尚未完整實作資料庫級冪等性儲存表、完整的重試處理邊界案例
+
+### Point Expire 自動化
+
+- 🚧 PointTransaction 已支援 TYPE_EXPIRE 類型
+- ⚠️ 自動過期排程、FIFO/LIFO 點數批次管理仍在開發
+
+## 📅 Planned (Future Roadmap)
+
+- Point Lot FIFO 先進先出點數生命週期管理
+- Event-Driven Architecture 領域事件
+- Outbox Pattern 交易性發件箱模式
+- Observability 可觀測性：日誌追蹤、效能指標、錯誤追蹤
+- Tenant-aware Rate Limiting 租戶級別速率限制
+- Webhook 系統：交易完成後主動通知外部系統
+- Queue Worker 非同步處理長時間任務
 
 ---
 
