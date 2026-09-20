@@ -34,6 +34,7 @@ class PointTransaction extends Model
         'amount' => 'integer',
         'balance_before' => 'integer',
         'balance_after' => 'integer',
+        'created_at' => 'datetime',
     ];
 
     public function tenant(): BelongsTo

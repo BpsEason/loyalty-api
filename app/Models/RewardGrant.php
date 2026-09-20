@@ -27,6 +27,7 @@ class RewardGrant extends Model
 
     protected $casts = [
         'granted_at' => 'datetime',
+        'created_at' => 'datetime',
     ];
 
     public function tenant(): BelongsTo

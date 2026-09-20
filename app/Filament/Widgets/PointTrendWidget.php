@@ -6,7 +6,6 @@ use App\Models\PointTransaction;
 use Filament\Widgets\ChartWidget;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
-use Illuminate\Support\Facades\DB;
 
 class PointTrendWidget extends ChartWidget
 {
@@ -36,9 +35,36 @@ class PointTrendWidget extends ChartWidget
             $dates->push($date->format('Y-m-d'));
         }
 
-        $earnData = $this->getTransactionDataByType(PointTransaction::TYPE_EARN, $startDate, $endDate, $dates);
-        $redeemData = $this->getTransactionDataByType(PointTransaction::TYPE_REDEEM, $startDate, $endDate, $dates);
-        $expireData = $this->getTransactionDataByType(PointTransaction::TYPE_EXPIRE, $startDate, $endDate, $dates);
+        // 使用資料庫條件聚合，由MySQL處理GROUP BY和SUM，減少PHP記憶體使用
+        $transactions = PointTransaction::whereIn('type', [
+            PointTransaction::TYPE_EARN,
+            PointTransaction::TYPE_REDEEM,
+            PointTransaction::TYPE_EXPIRE,
+        ])
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->selectRaw('DATE(created_at) as transaction_date,
+                SUM(CASE WHEN type = ? THEN amount ELSE 0 END) as earn_total,
+                SUM(CASE WHEN type = ? THEN amount ELSE 0 END) as redeem_total,
+                SUM(CASE WHEN type = ? THEN amount ELSE 0 END) as expire_total', [
+                PointTransaction::TYPE_EARN,
+                PointTransaction::TYPE_REDEEM,
+                PointTransaction::TYPE_EXPIRE,
+            ])
+            ->groupBy('transaction_date')
+            ->get()
+            ->keyBy('transaction_date');
+
+        // 整理數據
+        $earnData = [];
+        $redeemData = [];
+        $expireData = [];
+
+        foreach ($dates as $date) {
+            $dayData = $transactions->get($date);
+            $earnData[] = $dayData?->earn_total ?? 0;
+            $redeemData[] = $dayData?->redeem_total ?? 0;
+            $expireData[] = $dayData?->expire_total ?? 0;
+        }
 
         return [
             'datasets' => [
@@ -69,20 +95,6 @@ class PointTrendWidget extends ChartWidget
             ],
             'labels' => $dates->map(fn($date) => Carbon::parse($date)->format('m/d'))->toArray(),
         ];
-    }
-
-    protected function getTransactionDataByType(string $type, Carbon $startDate, Carbon $endDate, $dates): array
-    {
-        $transactions = PointTransaction::where('type', $type)
-            ->whereBetween('created_at', [$startDate, $endDate])
-            ->select(
-                DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(amount) as total')
-            )
-            ->groupBy('date')
-            ->pluck('total', 'date');
-
-        return $dates->map(fn($date) => $transactions->get($date) ?? 0)->toArray();
     }
 
     public function getType(): string

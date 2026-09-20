@@ -37,10 +37,39 @@ class RewardOverviewWidget extends ChartWidget
             $dates->push($date->format('Y-m-d'));
         }
 
-        // 各狀態的獎勵發放數據
-        $grantedData = $this->getRewardGrantDataByStatus(RewardGrant::STATUS_GRANTED, $startDate, $endDate, $dates);
-        $pendingData = $this->getRewardGrantDataByStatus(RewardGrant::STATUS_PENDING, $startDate, $endDate, $dates);
-        $failedData = $this->getRewardGrantDataByStatus(RewardGrant::STATUS_FAILED, $startDate, $endDate, $dates);
+        // 合併為單一查詢，使用條件聚合減少資料庫掃描次數
+        $grants = RewardGrant::whereIn('status', [
+            RewardGrant::STATUS_GRANTED,
+            RewardGrant::STATUS_PENDING,
+            RewardGrant::STATUS_FAILED,
+        ])
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->selectRaw(
+                'DATE(created_at) as date,
+                SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as granted_count,
+                SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as pending_count,
+                SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as failed_count',
+                [
+                    RewardGrant::STATUS_GRANTED,
+                    RewardGrant::STATUS_PENDING,
+                    RewardGrant::STATUS_FAILED,
+                ]
+            )
+            ->groupBy('date')
+            ->get()
+            ->keyBy('date');
+
+        // 整理數據
+        $grantedData = [];
+        $pendingData = [];
+        $failedData = [];
+
+        foreach ($dates as $date) {
+            $dayData = $grants->get($date);
+            $grantedData[] = $dayData?->granted_count ?? 0;
+            $pendingData[] = $dayData?->pending_count ?? 0;
+            $failedData[] = $dayData?->failed_count ?? 0;
+        }
 
         return [
             'datasets' => [
@@ -65,20 +94,6 @@ class RewardOverviewWidget extends ChartWidget
             ],
             'labels' => $dates->map(fn($date) => Carbon::parse($date)->format('m/d'))->toArray(),
         ];
-    }
-
-    protected function getRewardGrantDataByStatus(string $status, Carbon $startDate, Carbon $endDate, $dates): array
-    {
-        $grants = RewardGrant::where('status', $status)
-            ->whereBetween('created_at', [$startDate, $endDate])
-            ->select(
-                DB::raw('DATE(created_at) as date'),
-                DB::raw('COUNT(*) as count')
-            )
-            ->groupBy('date')
-            ->pluck('count', 'date');
-
-        return $dates->map(fn($date) => $grants->get($date) ?? 0)->toArray();
     }
 
     public function getType(): string

@@ -29,19 +29,30 @@ class OverviewStatsWidget extends BaseWidget
         $totalCustomers = Customer::count();
         $todayNewCustomers = Customer::whereDate('created_at', $today)->count();
 
-        // 點數發放與兌換統計
-        $monthEarnPoints = PointTransaction::where('type', PointTransaction::TYPE_EARN)
-            ->where('created_at', '>=', $thisMonthStart)
-            ->sum('amount');
-        $monthRedeemPoints = PointTransaction::where('type', PointTransaction::TYPE_REDEEM)
-            ->where('created_at', '>=', $thisMonthStart)
-            ->sum('amount');
-        $todayEarnPoints = PointTransaction::where('type', PointTransaction::TYPE_EARN)
-            ->whereDate('created_at', $today)
-            ->sum('amount');
-        $todayRedeemPoints = PointTransaction::where('type', PointTransaction::TYPE_REDEEM)
-            ->whereDate('created_at', $today)
-            ->sum('amount');
+        // 合併點數發放與兌換統計為單一查詢
+        $pointStats = PointTransaction::whereIn('type', [PointTransaction::TYPE_EARN, PointTransaction::TYPE_REDEEM])
+            ->selectRaw(
+                'SUM(CASE WHEN type = ? AND created_at >= ? THEN amount ELSE 0 END) as month_earn,
+                SUM(CASE WHEN type = ? AND created_at >= ? THEN amount ELSE 0 END) as month_redeem,
+                SUM(CASE WHEN type = ? AND DATE(created_at) = ? THEN amount ELSE 0 END) as today_earn,
+                SUM(CASE WHEN type = ? AND DATE(created_at) = ? THEN amount ELSE 0 END) as today_redeem',
+                [
+                    PointTransaction::TYPE_EARN,
+                    $thisMonthStart,
+                    PointTransaction::TYPE_REDEEM,
+                    $thisMonthStart,
+                    PointTransaction::TYPE_EARN,
+                    $today,
+                    PointTransaction::TYPE_REDEEM,
+                    $today,
+                ]
+            )
+            ->first();
+
+        $monthEarnPoints = $pointStats->month_earn ?? 0;
+        $monthRedeemPoints = $pointStats->month_redeem ?? 0;
+        $todayEarnPoints = $pointStats->today_earn ?? 0;
+        $todayRedeemPoints = $pointStats->today_redeem ?? 0;
 
         // 活動統計
         $activeCampaigns = Campaign::where('status', Campaign::STATUS_ACTIVE)->count();
