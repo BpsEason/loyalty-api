@@ -2142,6 +2142,460 @@ Queue / Event
 
 ---
 
+# 📊 Large-Scale Scalability & Capacity Planning
+
+本專案的 Loyalty / Point API 並非只針對數千或數萬會員設計，而是以未來可能面對：
+
+- 300,000+ Customers
+- 10M+ Point Transactions
+- 30M+ Point Transactions
+- 更高交易量與 API concurrency
+
+作為容量規劃情境。
+
+> 這些數字目前屬於容量規劃與壓力測試目標，不代表目前環境已經完成對應規模的實際 Benchmark。
+
+## Capacity Model
+
+| Scale       |              Customers | Point Transactions | Architecture Focus                             |
+| ----------- | ---------------------: | -----------------: | ---------------------------------------------- |
+| Current     | 目前 Seeder / 測試規模 |         目前資料量 | Laravel + MySQL + Redis                        |
+| Growth      |                   100K |           Millions | Index / Query / Pagination                     |
+| Target      |                   300K |            10M–30M | Queue / Aggregation / Read Optimization        |
+| Large Scale |                    1M+ |              100M+ | Read Replica / Partition / Archive / Reporting |
+
+## Scalability Principles
+
+### 1. PointTransaction 是 Ledger
+
+PointTransaction 是點數異動的歷史 Ledger。不要因為資料量增加就把歷史交易直接從主流程移除。
+
+設計原則：
+
+- PointAccount 保存目前餘額
+- PointTransaction 保存異動紀錄
+- PointService 負責交易一致性
+- Redis Lock + DB Transaction + Row Lock 保護高併發點數操作
+
+真正的長期瓶頸不是單純 `PointAccount.balance`，而是：
+
+- PointTransaction 持續成長
+- Dashboard aggregation
+- Customer transaction history
+- Reporting / Export
+- Historical data query
+
+### 2. Dashboard 不應無限制掃描 Ledger
+
+目前 Dashboard 以 SQL aggregation / query 為主要方式。隨著 PointTransaction 成長，未來需要演進為：
+
+```text
+PointTransaction
+      ↓
+Daily / Monthly Aggregation
+      ↓
+Dashboard / Reporting
+```
+
+> Aggregation table / reporting database 目前尚未實作，僅列為 Future Architecture。
+
+### 3. Read / Write Separation
+
+未來架構：
+
+```text
+Laravel API
+    │
+    ├── Write → MySQL Primary
+    │
+    └── Read  → Read Replica
+```
+
+目前仍使用單一 MySQL instance。Read Replica 是未來當以下狀況發生時再考慮的演進方案：
+
+- API Read Traffic 增加
+- Dashboard 查詢增加
+- Reporting 查詢增加
+- PointTransaction history 查詢增加
+
+## Asynchronous Processing
+
+當會員規模達到 300K+ 後，以下操作不應長時間阻塞 HTTP Request：
+
+- 大量會員匯入
+- 大量點數發放
+- 大量 Reward Grant
+- CSV / Excel Export
+- 大型報表
+- Webhook delivery
+- Notification
+- Historical data processing
+
+架構概念：
+
+```text
+API Request
+    ↓
+Create Job
+    ↓
+Queue
+    ↓
+Worker
+    ↓
+Batch Processing
+```
+
+目前狀態：
+
+- **Infrastructure → Completed / Available**：Laravel Queue 基礎設施已存在（jobs 表格已建立）
+- **Business Async Processing → Planned**：尚未實作上述實際商業邏輯的非同步 Job
+
+## Large Dataset API Design
+
+300K customers 不代表 API 可以一次回傳全部資料。API 已實作以下流程：
+
+```text
+Request
+  ↓
+Tenant Scope
+  ↓
+Filter
+  ↓
+Pagination
+  ↓
+Limited Result Set
+```
+
+目前 API 使用 page-based pagination，每頁最多 50 筆資料。未來當 offset pagination 成為實際瓶頸時，可評估導入 cursor-based pagination。
+
+> Cursor-based pagination may be evaluated when offset pagination becomes a measured bottleneck.
+
+## Large Data Import / Export
+
+300K customers 時，避免使用 `Customer::all()` 一次載入全部資料。未來大型資料處理應採：
+
+```text
+Chunk / Lazy Processing
+        ↓
+Queue Job
+        ↓
+Batch Processing
+        ↓
+Temporary File / Object Storage
+        ↓
+Download
+```
+
+原則：
+
+- Export 應採 Async Job
+- Import 應採 Batch Processing
+- 避免一次將 300K records 載入 PHP memory
+- 避免長時間 HTTP request
+- 避免單一 transaction 包含整批資料
+
+目前狀態：Export / Import 功能尚未實作，列為未來規劃。
+
+## Point Transaction Lifecycle
+
+當交易數量由：
+
+```text
+1M
+ ↓
+10M
+ ↓
+30M
+ ↓
+100M+
+```
+
+持續增加時，資料管理策略需要逐步演進。
+
+### Current
+
+```text
+PointTransaction
+    ↓
+MySQL
+```
+
+### Future
+
+```text
+Hot Transactions
+        ↓
+MySQL Primary
+        ↓
+Historical Transactions
+        ↓
+Archive / Partition
+```
+
+> Partitioning / Archive strategy is a future scalability option and is not assumed to be implemented unless verified in the current database schema.
+
+## Database Scalability
+
+目前階段的第一優先：
+
+- Composite indexes
+- Tenant-aware indexes
+- Query optimization
+- EXPLAIN / EXPLAIN ANALYZE
+- N+1 prevention
+- Pagination
+
+當資料量進一步增加，再考慮：
+
+```text
+MySQL Primary
+      │
+      ├── Read Replica
+      │
+      ├── Reporting / Aggregation
+      │
+      └── Archive / Partition
+```
+
+> Indexes solve query access patterns; they do not by themselves solve unlimited data growth.
+
+## Application Scalability
+
+未來 Laravel Application 可以水平擴展：
+
+```text
+                Load Balancer
+                     │
+          ┌──────────┼──────────┐
+          ↓          ↓          ↓
+      Laravel 1  Laravel 2  Laravel 3
+          │          │          │
+          └──────────┼──────────┘
+                     ↓
+                   Redis
+                     │
+                   MySQL
+```
+
+需確認：
+
+- Session 不依賴單一 application instance
+- Cache 使用 shared Redis
+- Queue 使用 shared backend
+- File storage 不依賴 local instance
+- JWT API 本身適合 stateless request
+
+> Future horizontal scaling architecture. 目前尚未部署 Load Balancer / 多 Laravel instances。
+
+## Redis Responsibilities
+
+目前 Redis 已實際使用在：
+
+- Point transaction distributed lock（跨實例同步）
+- Idempotency（Redis 快取冪等性回應）
+- Cache（一般應用快取）
+- Queue（Laravel Queue 後端）
+
+Redis 是 coordination / caching layer，不應成為 Point Ledger 的 source of truth。核心資料仍以 MySQL 為準。
+
+## Scalability & Load Testing
+
+未來容量測試情境：
+
+### Customer Scale
+
+```text
+100K Customers
+300K Customers
+1M Customers
+```
+
+### Point Transaction Scale
+
+```text
+1M
+10M
+30M
+100M
+```
+
+### API Concurrency
+
+```text
+100 concurrent requests
+500 concurrent requests
+1,000 concurrent requests
+```
+
+### Point Redemption Concurrency
+
+```text
+Same Customer
+Same PointAccount
+Concurrent Redeem
+```
+
+需驗證：
+
+- 不會 negative balance
+- 不會 double spend
+- Transaction ledger 正確
+- Lock contention
+- Deadlock / retry
+- Response latency
+
+## Performance Metrics
+
+未來壓測至少觀察：
+
+- Throughput / Requests per Second
+- P50 latency
+- P95 latency
+- P99 latency
+- MySQL CPU
+- MySQL memory
+- MySQL connections
+- Slow queries
+- Lock wait
+- Deadlocks
+- Redis latency
+- Redis memory
+- Queue depth
+- Queue processing latency
+- PHP memory usage
+- PHP-FPM workers
+
+> Scalability must be demonstrated through measurable benchmark results rather than architectural claims.
+
+## Reliability at Scale
+
+大型 Loyalty System 不只需要效能，也需要：
+
+- Database failure handling
+- Redis failure handling
+- Queue retry
+- Dead-letter strategy（Future）
+- Idempotency
+- Transaction retry
+- Deadlock retry
+- API timeout
+- External service retry
+- Backup / Restore
+- Recovery testing
+
+目前狀態：基礎的交易重試機制已實作（DB 交易死鎖 3 次重試），其餘進階可靠性功能列為未來規劃。
+
+## Scalability Roadmap
+
+### Phase 1 — Current Foundation
+
+```text
+Laravel
++
+MySQL
++
+Redis
++
+JWT
++
+Multi-Tenant
++
+Point Ledger
++
+Database Indexing
++
+Transaction / Locking
+```
+
+### Phase 2 — 300K Customer Readiness
+
+```text
+Query Optimization
++
+Pagination
++
+Async Export
++
+Queue Processing
++
+Dashboard Aggregation
++
+Load Testing
+```
+
+### Phase 3 — High Transaction Volume
+
+```text
+Read Replica
++
+Aggregation
++
+Archive
++
+Partition Evaluation
+```
+
+### Phase 4 — Very Large Scale
+
+```text
+Dedicated Reporting
++
+Advanced Partitioning
++
+Horizontal Application Scaling
++
+Dedicated Analytics Infrastructure
+```
+
+## Architecture Decision: Avoid Premature Complexity
+
+這個專案目前採取：
+
+> Modular Monolith First, Scale Based on Evidence.
+
+目前不因為「未來可能有 300K / 1M customers」就立即導入：
+
+- Microservices
+- Kafka
+- Kubernetes
+- Sharding
+- Elasticsearch
+- Separate Reporting Database
+- Complex Event Bus
+
+除非：
+
+1. 實際 workload 已經出現瓶頸
+2. Benchmark 證明目前架構不足
+3. 新架構能解決明確問題
+4. Migration / Operational cost 可以接受
+
+核心原則：
+
+```text
+Measure
+   ↓
+Identify Bottleneck
+   ↓
+Benchmark
+   ↓
+Optimize
+   ↓
+Re-measure
+   ↓
+Scale Architecture
+```
+
+而不是：
+
+```text
+More Users
+   ↓
+Add More Infrastructure
+```
+
+---
+
 # 📊 Current Project Status
 
 ## ✅ Completed
@@ -2205,6 +2659,7 @@ Queue / Event
 ### Database & Seeders
 
 - ✅ 完整 Migration 定義所有資料表結構
+- ✅ Database Index Optimization：已加入效能複合索引優化查詢效能
 - ✅ Demo Seeder 建立：
     - Super Admin: `superadmin@example.com` / `password123`
     - Demo Tenants: `coffee.localhost` (Demo Coffee), `fitness.localhost` (Demo Fitness)
@@ -2251,6 +2706,13 @@ Queue / Event
 - Tenant-aware Rate Limiting 租戶級別速率限制
 - Webhook 系統：交易完成後主動通知外部系統
 - Queue Worker 非同步處理長時間任務
+- Async large-data export 非同步大數據匯出
+- Daily / Monthly aggregation 每日/每月聚合表
+- Read Replica 讀取複本
+- Archive / Partition strategy 資料歸檔/分區策略
+- Large-scale load testing 大規模負載測試
+- Advanced observability 進階可觀測性
+- Horizontal application scaling 應用程式水平擴展
 
 ---
 

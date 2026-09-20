@@ -58,7 +58,8 @@ class PointTransactionController extends Controller
             return ApiResponse::error('Customer not found', null, [], 404);
         }
 
-        $transactions = $customer->pointTransactions()->latest()->paginate();
+        $perPage = min($request->input('per_page', 15), 100);
+        $transactions = $customer->pointTransactions()->latest()->paginate($perPage);
 
         return ApiResponse::success(
             data: PointTransactionResource::collection($transactions),

@@ -51,7 +51,8 @@ class CustomerController extends Controller
     )]
     public function index(Request $request): JsonResponse
     {
-        $customers = Customer::with('tenant')->paginate();
+        $perPage = min($request->input('per_page', 15), 50);
+        $customers = Customer::with('tenant')->paginate($perPage);
 
         return ApiResponse::success(
             data: CustomerResource::collection($customers),

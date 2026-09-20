@@ -49,20 +49,42 @@ class Customer extends Model
     protected static function generateMemberCode($tenantId): string
     {
         $prefix = 'M';
-        // 使用 withoutGlobalScope 移除租戶全域範圍，才能正確查詢同一租戶下的所有客戶
-        $lastCustomer = static::withoutGlobalScope('tenant')
-            ->where('tenant_id', $tenantId)
-            ->whereNotNull('member_code')
-            ->latest('id')
-            ->first();
+        $maxRetries = 3;
+        $retryCount = 0;
 
-        if ($lastCustomer && preg_match('/^M(\d+)$/', $lastCustomer->member_code, $matches)) {
-            $nextNumber = intval($matches[1]) + 1;
-        } else {
-            $nextNumber = 1001; // 從 1001 開始
+        while ($retryCount < $maxRetries) {
+            // 使用 lockForUpdate() 加入資料庫行鎖，避免並發讀取同一筆最後客戶
+            $lastCustomer = static::withoutGlobalScope('tenant')
+                ->where('tenant_id', $tenantId)
+                ->whereNotNull('member_code')
+                ->latest('id')
+                ->lockForUpdate()
+                ->first();
+
+            if ($lastCustomer && preg_match('/^M(\d+)$/', $lastCustomer->member_code, $matches)) {
+                $nextNumber = intval($matches[1]) + 1;
+            } else {
+                $nextNumber = 1001; // 從 1001 開始
+            }
+
+            $candidateCode = $prefix . str_pad((string) $nextNumber, 6, '0', STR_PAD_LEFT);
+
+            // 預先檢查此編號是否已存在，提早避免唯一約束異常
+            $exists = static::withoutGlobalScope('tenant')
+                ->where('tenant_id', $tenantId)
+                ->where('member_code', $candidateCode)
+                ->exists();
+
+            if (!$exists) {
+                return $candidateCode;
+            }
+
+            $retryCount++;
+            usleep(100000); // 等待100ms再重試
         }
 
-        return $prefix . str_pad((string) $nextNumber, 6, '0', STR_PAD_LEFT);
+        // 若重試多次仍失敗，使用時間戳作為後備方案，確保不會卡住
+        return $prefix . str_pad((string)(1000 + time() % 900000), 6, '0', STR_PAD_LEFT);
     }
 
     /**
