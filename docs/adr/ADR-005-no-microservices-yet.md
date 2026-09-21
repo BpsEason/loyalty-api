@@ -13,6 +13,7 @@
 - Point Transaction（點數交易）
 - Campaign（行銷活動）
 - Reward（獎勵管理）
+- Coupon（優惠券管理）
 - Admin Panel（管理後台）
 
 這些域之間仍然存在緊密的業務關聯和事務邊界重疊。

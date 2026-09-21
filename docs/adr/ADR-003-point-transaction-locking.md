@@ -5,18 +5,7 @@
 - [ADR-002: Shared Database Multi-Tenancy](ADR-002-shared-database-tenancy.md) - 多租戶隔離基礎
 - [ADR-006: Idempotency Strategy](ADR-006-idempotency-strategy.md) - 冪等性保證，與鎖定機制協同工作
 - [ADR-007: Point Lot & Expiration Strategy](ADR-007-point-lot-expiration-strategy.md) - 批次點數管理，依賴本文件的鎖定機制
-
-## Context相關 ADR
-
-- [ADR-002: Shared Database Multi-Tenancy](ADR-002-shared-database-tenancy.md) - 多租戶隔離基礎
-- [ADR-006: Idempotency Strategy](ADR-006-idempotency-strategy.md) - 冪等性保證機制
-- [ADR-007: Point Lot & Expiration Strategy](ADR-007-point-lot-expiration-strategy.md) - 批次點數與過期處理
-
-## Context相關ADR
-
-- [ADR-002: Shared Database Multi-Tenancy](ADR-002-shared-database-tenancy.md) - 多租戶隔離機制
-- [ADR-006: Idempotency Strategy](ADR-006-idempotency-strategy.md) - 冪等性實現策略
-- [ADR-007: Point Lot & Expiration Strategy](ADR-007-point-lot-expiration-strategy.md) - 批次點數與過期處理
+- [ADR-008: Coupon System](ADR-008-coupon-system.md) - 優惠券系統，與點數鎖定策略完全對齊
 
 ## Context
 
