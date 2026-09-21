@@ -38,8 +38,7 @@ class TenantMiddleware
                 );
             }
 
-            // 若有登入使用者，驗證使用者是否有權存取該 Tenant
-            if ($user && (int)$user->tenant_id !== (int)$tenant->id) {
+            if ($user && $user->tenant_id != $tenant->id) {
                 if (!(method_exists($user, 'hasRole') && $user->hasRole('super_admin'))) {
                     return ApiResponse::error(
                         message: 'User not authorized to access this tenant.',

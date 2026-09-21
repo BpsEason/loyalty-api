@@ -31,6 +31,7 @@ class UserCouponResource extends JsonResource
         /** @var \App\Models\UserCoupon $this */
         return [
             'id' => $this->id,
+            'customer_id' => $this->customer_id,
             'status' => $this->status,
             'issued_at' => $this->issued_at?->toISOString(),
             'used_at' => $this->used_at?->toISOString(),

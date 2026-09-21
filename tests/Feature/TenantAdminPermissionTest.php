@@ -22,7 +22,7 @@ class TenantAdminPermissionTest extends TestCase
     public function test_tenant_admin_can_access_panel_and_has_role(): void
     {
         /** @var User $tenantAdmin */
-        $tenantAdmin = User::where('email', 'admin-a@example.com')->first();
+        $tenantAdmin = User::where('email', 'admin-r@example.com')->first();
         $this->assertNotNull($tenantAdmin);
 
         $this->actingAs($tenantAdmin);
@@ -42,7 +42,7 @@ class TenantAdminPermissionTest extends TestCase
         $this->assertNotNull($tenantB);
 
         /** @var User $tenantAdminA */
-        $tenantAdminA = User::where('email', 'admin-a@example.com')->first();
+        $tenantAdminA = User::where('email', 'admin-r@example.com')->first();
         $this->assertNotNull($tenantAdminA);
 
         $this->actingAs($tenantAdminA);
@@ -53,8 +53,10 @@ class TenantAdminPermissionTest extends TestCase
     public function test_tenant_admin_only_sees_own_tenant_roles(): void
     {
         /** @var User $tenantAdminA */
-        $tenantAdminA = User::where('email', 'admin-a@example.com')->first();
+        $tenantAdminA = User::where('email', 'admin-r@example.com')->first();
+        $this->assertNotNull($tenantAdminA);
         $this->actingAs($tenantAdminA);
+        setPermissionsTeamId($tenantAdminA->tenant_id);
 
         $rolesQuery = RoleResource::getEloquentQuery();
 
@@ -71,6 +73,8 @@ class TenantAdminPermissionTest extends TestCase
     {
         /** @var User $superAdmin */
         $superAdmin = User::where('email', 'superadmin@example.com')->first();
+        $this->assertNotNull($superAdmin);
+
         $this->actingAs($superAdmin);
 
         $rolesQuery = RoleResource::getEloquentQuery();

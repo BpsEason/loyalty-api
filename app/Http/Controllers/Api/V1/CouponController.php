@@ -78,7 +78,7 @@ class CouponController extends Controller
     {
         // 驗證租戶
         $tenant = $tenantContext->getTenant();
-        if ($tenant && $customer->tenant_id !== $tenant->id) {
+        if ($tenant && $customer->tenant_id != $tenant->id) {
             return ApiResponse::error('Customer not found', null, [], 404);
         }
 
@@ -96,7 +96,7 @@ class CouponController extends Controller
             return ApiResponse::success(
                 data: new UserCouponResource($userCoupon->load('couponTemplate')),
                 message: 'Coupon claimed successfully',
-                code: 201
+                status: 201
             );
         } catch (\RuntimeException $e) {
             return ApiResponse::error($e->getMessage(), null, [], 400);
