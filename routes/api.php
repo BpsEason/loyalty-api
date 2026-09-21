@@ -34,6 +34,12 @@ Route::prefix('v1')->group(function () {
 
             // POS-specific redemption endpoint (semantic route)
             Route::post('customers/{customer}/points/redeem', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'redeem'])->middleware('idempotent');
+
+            // Coupon API routes
+            Route::get('customers/{customer}/coupons', [\App\Http\Controllers\Api\V1\CouponController::class, 'index']);
+            Route::get('customers/{customer}/coupons/{userCoupon}', [\App\Http\Controllers\Api\V1\CouponController::class, 'show']);
+            Route::post('customers/{customer}/coupons/claim', [\App\Http\Controllers\Api\V1\CouponController::class, 'claim'])->middleware('idempotent');
+            Route::post('customers/{customer}/coupons/{userCoupon}/redeem', [\App\Http\Controllers\Api\V1\CouponController::class, 'redeem'])->middleware('idempotent');
         });
     });
 });

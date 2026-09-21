@@ -87,6 +87,16 @@ class DatabaseSeeder extends Seeder
          */
         $tenantsData = [
             [
+                'name' => 'Demo Retail',
+                'domain' => 'retail.localhost',
+                'is_active' => true,
+                'settings' => [
+                    'currency' => 'TWD',
+                    'timezone' => 'Asia/Taipei',
+                    'type' => 'retail_store',
+                ],
+            ],
+            [
                 'name' => 'Demo Coffee',
                 'domain' => 'coffee.localhost',
                 'is_active' => true,
@@ -127,8 +137,18 @@ class DatabaseSeeder extends Seeder
          * ============================================================
          */
         foreach ($tenants as $index => $tenant) {
-            $tenantLetter = $index === 0 ? 'a' : 'b';
-            $tenantName = $index === 0 ? 'A' : 'B';
+            $tenantLetter = match ($index) {
+                0 => 'r', // retail
+                1 => 'c', // coffee
+                2 => 'f', // fitness
+                default => 'x',
+            };
+            $tenantName = match ($index) {
+                0 => 'R', // Retail
+                1 => 'C', // Coffee
+                2 => 'F', // Fitness
+                default => 'X',
+            };
 
             // 切換到目前 Tenant 的 Spatie Team Scope
             setPermissionsTeamId($tenant->id);
@@ -325,10 +345,15 @@ class DatabaseSeeder extends Seeder
 
         /*
          * ============================================================
-         * 7. Reward Demo Data
+         * 7. Reward & Coupon Demo Data
          * ============================================================
+         * 執行順序非常重要：
+         * 1. RewardSeeder 先執行，建立所有 Tenant / Customer / Campaign 等基礎 Demo 資料
+         * 2. CouponSeeder 依賴 RewardSeeder 已建立的資料，只負責建立 Coupon 相關資料
+         * CouponSeeder 是所有 Coupon Demo Data 的唯一來源，避免重複建立
          */
         $this->call(RewardSeeder::class);
+        $this->call(CouponSeeder::class);
 
         /*
          * 最後恢復 Global Team Scope。

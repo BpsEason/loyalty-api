@@ -2,8 +2,17 @@
 
 namespace App\Providers\Filament;
 
-use Filament\Http\Middleware\Authenticate;
+use App\Filament\Widgets\CampaignOverviewWidget;
+use App\Filament\Widgets\CustomerGrowthWidget;
+use App\Filament\Widgets\OverviewStatsWidget;
+use App\Filament\Widgets\PointTrendWidget;
+use App\Filament\Widgets\RecentTransactionsWidget;
+use App\Filament\Widgets\RewardOverviewWidget;
+use App\Http\Middleware\RememberFilamentTenant;
+use App\Http\Middleware\SetPermissionsTeamId;
+use App\Models\Tenant;
 use BezhanSalleh\FilamentShield\FilamentShieldPlugin;
+use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
@@ -17,12 +26,6 @@ use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
-use App\Filament\Widgets\OverviewStatsWidget;
-use App\Filament\Widgets\PointTrendWidget;
-use App\Filament\Widgets\CustomerGrowthWidget;
-use App\Filament\Widgets\CampaignOverviewWidget;
-use App\Filament\Widgets\RewardOverviewWidget;
-use App\Filament\Widgets\RecentTransactionsWidget;
 
 class AdminPanelProvider extends PanelProvider
 {
@@ -32,25 +35,35 @@ class AdminPanelProvider extends PanelProvider
             ->default()
             ->id('admin')
             ->path('admin')
+            ->maxContentWidth('full')
             ->globalSearch(false)
             ->login()
             ->brandName('Loyalty Platform')
             ->font('Inter')
             ->colors([
-                'primary' => 'var(--primary-500)',
+                'primary' => Color::Blue,
             ])
             ->darkMode(true)
             ->viteTheme('resources/css/filament/admin/theme.css')
-            ->tenant(\App\Models\Tenant::class)
+            ->tenant(Tenant::class)
             ->tenantMiddleware([
-                \App\Http\Middleware\RememberFilamentTenant::class,
+                RememberFilamentTenant::class,
             ])
-            ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
-            ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
+            ->discoverResources(
+                in: app_path('Filament/Resources'),
+                for: 'App\\Filament\\Resources',
+            )
+            ->discoverPages(
+                in: app_path('Filament/Pages'),
+                for: 'App\\Filament\\Pages',
+            )
             ->pages([
                 Dashboard::class,
             ])
-            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
+            ->discoverWidgets(
+                in: app_path('Filament/Widgets'),
+                for: 'App\\Filament\\Widgets',
+            )
             ->widgets([
                 OverviewStatsWidget::class,
                 PointTrendWidget::class,
@@ -74,7 +87,7 @@ class AdminPanelProvider extends PanelProvider
                 FilamentShieldPlugin::make(),
             ])
             ->authMiddleware([
-                \App\Http\Middleware\SetPermissionsTeamId::class,
+                SetPermissionsTeamId::class,
                 Authenticate::class,
             ]);
     }

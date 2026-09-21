@@ -120,4 +120,12 @@ class Customer extends Model
     {
         return $this->hasMany(PointTransaction::class);
     }
+
+    /**
+     * 客戶的所有優惠券
+     */
+    public function userCoupons(): HasMany
+    {
+        return $this->hasMany(\App\Models\UserCoupon::class);
+    }
 }

@@ -21,6 +21,9 @@ class RewardSeeder extends Seeder
 {
     // 使用DatabaseSeeder建立的正式Demo租戶（透過domain穩定識別）
     protected array $demoTenants = [
+        'retail' => [
+            'domain' => 'retail.localhost',
+        ],
         'coffee' => [
             'domain' => 'coffee.localhost',
         ],
@@ -33,6 +36,13 @@ class RewardSeeder extends Seeder
 
     // 每個租戶專屬的客戶資料（DatabaseSeeder已建立客戶，此處用於匹配索引）
     protected array $tenantCustomerData = [
+        'retail' => [
+            ['name' => '陳美玲', 'email' => 'meiling.chen', 'phone' => '0900111222'],
+            ['name' => '王大偉', 'email' => 'dawei.wang', 'phone' => '0900333444'],
+            ['name' => '林小芳', 'email' => 'xiaofang.lin', 'phone' => '0900555666'],
+            ['name' => '張建國', 'email' => 'jianguo.zhang', 'phone' => '0900777888'],
+            ['name' => '吳美麗', 'email' => 'meili.wu', 'phone' => '0900999000'],
+        ],
         'coffee' => [
             ['name' => '劉雅婷', 'email' => 'yating.liu', 'phone' => '0911555666'],
             ['name' => '楊志偉', 'email' => 'zhiwei.yang', 'phone' => '0922777888'],
@@ -181,8 +191,16 @@ class RewardSeeder extends Seeder
         ],
     ];
 
+
+
     // 額外為活躍會員建立歷史點數交易的時間軸
     protected array $historicalTransactions = [
+        'retail' => [
+            0 => [ // 陳美玲（高活躍）
+                ['days_ago' => 0, 'type' => PointTransaction::TYPE_EARN, 'amount' => 100, 'description' => '周末購物累積'],
+                ['days_ago' => 14, 'type' => PointTransaction::TYPE_EARN, 'amount' => 150, 'description' => '周年慶消費'],
+            ],
+        ],
         'coffee' => [
             0 => [ // 劉雅婷（高活躍）
                 ['days_ago' => 0, 'type' => PointTransaction::TYPE_EARN, 'amount' => 50, 'description' => '早安咖啡優惠'],
@@ -256,6 +274,8 @@ class RewardSeeder extends Seeder
 
             // 5. 為活躍會員建立歷史點數交易（時間軸）
             $this->createHistoricalTransactions($tenantKey, $tenant, $tenantCustomers, $stats);
+
+            // 6. 優惠券相關資料由CouponSeeder統一建立，此處不再處理
 
             $this->command->newLine();
         }
@@ -528,5 +548,6 @@ class RewardSeeder extends Seeder
         $this->command->line(sprintf("RewardGrant 總數：%d", \App\Models\RewardGrant::count()));
         $this->command->line(sprintf("PointAccount 總數：%d", \App\Models\PointAccount::count()));
         $this->command->line(sprintf("PointTransaction 總數：%d", \App\Models\PointTransaction::count()));
+        // Coupon 相關統計由 CouponSeeder 負責輸出
     }
 }
