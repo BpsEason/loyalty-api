@@ -471,4 +471,96 @@ class CustomerApiTest extends TestCase
         // 驗證兩個租戶都建立了各自的交易
         $this->assertDatabaseCount('point_transactions', 2);
     }
+
+    #[Test]
+    public function same_idempotency_key_with_different_request_body_is_rejected(): void
+    {
+        Cache::flush();
+        $token = $this->getTokenForUserA();
+        $idempotencyKey = 'test-conflict-001';
+
+        // 第一次請求：amount = 300
+        $response1 = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/points/redeem", [
+            'amount' => 300,
+        ]);
+
+        $response1->assertStatus(201);
+
+        // 第二次請求：相同Idempotency-Key但不同的amount = 500
+        $response2 = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/points/redeem", [
+            'amount' => 500,
+        ]);
+
+        // 應該返回409衝突
+        $response2->assertStatus(409)
+            ->assertJsonPath('message', '冪等性鍵已被使用且請求內容不一致');
+
+        // 驗證只扣了一次點數，餘額維持700
+        $this->pointAccountA->refresh();
+        $this->assertEquals(700, $this->pointAccountA->balance);
+
+        // 驗證只建立了一筆交易
+        $this->assertDatabaseCount('point_transactions', 1);
+    }
+
+    #[Test]
+    public function idempotency_replays_original_response_correctly(): void
+    {
+        Cache::flush();
+        $token = $this->getTokenForUserA();
+        $idempotencyKey = 'test-replay-001';
+
+        // 第一次請求
+        $response1 = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/points/redeem", [
+            'amount' => 300,
+            'description' => 'Test replay',
+            'reference' => 'ORDER-12345',
+        ]);
+
+        $response1->assertStatus(201);
+        $firstData = $response1->json('data');
+
+        // 第二次請求，使用相同的Idempotency-Key和相同的請求體
+        $response2 = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/points/redeem", [
+            'amount' => 300,
+            'description' => 'Test replay',
+            'reference' => 'ORDER-12345',
+        ]);
+
+        // 驗證回應包含idempotent標記
+        $response2->assertStatus(201)
+            ->assertJsonPath('idempotent', true)
+            ->assertJsonPath('message', '點數交易已取回（冪等性重試）');
+
+        // 驗證交易ID相同，確保是同一筆交易
+        $secondData = $response2->json('data');
+        $this->assertEquals($firstData['id'], $secondData['id']);
+
+        // 驗證餘額只扣減一次
+        $this->pointAccountA->refresh();
+        $this->assertEquals(700, $this->pointAccountA->balance);
+
+        // 驗證只建立了一筆交易
+        $this->assertDatabaseCount('point_transactions', 1);
+
+        // 驗證PointLot也只被修改一次，餘額保持正確
+        $pointLot = \App\Models\PointLot::where('customer_id', $this->customerA->id)->first();
+        $this->assertEquals(700, $pointLot->remaining_points);
+    }
 }

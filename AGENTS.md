@@ -77,7 +77,7 @@ External Systems
  Services / Domain Logic
        │
        ▼
- Models / Repositories
+ Eloquent Models
        │
        ▼
  MySQL
@@ -269,30 +269,26 @@ Commit
 
 而重複送出相同 Request。
 
-因此點數寫入 API 未來應支援：
+點數寫入 API **已實作**冪等性支援：
 
 ```text
 Idempotency-Key
 ```
 
-特別是：
+支援的 API：
 
-- Earn
-- Redeem
-- Refund
-- Adjust
+- 僅套用在需要冪等性保護的點數變更路由
+- 保護的操作：POST /customers/{customer}/point-transactions, POST /customers/{customer}/points/redeem (對應 Earn、Redeem、Refund、Adjust 等關鍵點數操作)
 
-不得讓相同 Business Request 因重試而重複執行。
+實現狀態：
 
-如果 Idempotency 尚未實作：
-
-> 必須明確標示為 Planned / In Progress，不得在文件中宣稱已完成。
+- 詳細實現狀態請參考 Implementation Status 章節
 
 ---
 
-# 11. Point Expiration
+# 11. Point Expiration / Point Lot
 
-未來點數到期機制應考慮：
+本系統核心已實作 Point Lot / FIFO 機制，詳細驗證狀態請參考 Implementation Status 章節：
 
 ```text
 Point Lot / Bucket
@@ -302,13 +298,24 @@ Expiration Date
 FIFO Consumption
 ```
 
+FIFO = First In, First Out，實際排序規則：
+
+```text
+earned_at ASC
+id ASC
+```
+
 目的：
 
-讓不同批次取得的點數可以獨立追蹤到期時間。
+讓不同批次取得的點數可以獨立追蹤到期時間，實現精準的點數過期管理。
 
-如果目前系統尚未實作 Point Lot / FIFO：
+目前所有點數操作都與 Point Lot 系統整合：
 
-不得假設目前 Balance 已經具備此能力。
+- Earn: 建立新的點數批次
+- Redeem: 按 FIFO 順序消耗點數
+- Refund: 建立新的點數批次
+- Adjust: 正數建立批次，負數按 FIFO 消耗
+- Expire: 按 FIFO 順序標記點數過期
 
 ---
 
@@ -514,7 +521,9 @@ Endpoint path 就不應再次重複 `/api/v1`。
 
 # 18. Rate Limiting
 
-API 是供外部系統使用，因此未來應支援合理的 Rate Limiting。
+目前已提供 Laravel 基礎 API Rate Limiting，所有 API 路由皆已套用 `throttle:api`。
+
+但目前限制模型並非以 Tenant 為獨立隔離單位，未來如實際流量與業務需求需要，再評估實作 Tenant-aware Rate Limiting：
 
 設計時要考慮：
 
@@ -880,3 +889,319 @@ Verify runtime behavior
 而是建立：
 
 > **一套可以被不同產品、平台與第三方服務重複整合的 Multi-Tenant Loyalty / Point API Platform。**
+
+---
+
+# 28. Implementation Status
+
+本節記錄所有功能的實際實現狀態，狀態定義：
+
+- **Implemented**: 功能已完成，且其必要的 production code、configuration、schema、tests 或 runtime verification 已存在，所有必要證據齊全
+- **Implemented — Core (Validation In Progress)**: 核心程式碼已實作，但完整驗證、邊緣場境測試或生產環境驗證仍在進行中
+- **Not Yet Fully Verified**: 基礎機制存在，但真實世界場景的完整驗證尚未完成
+- **Planned**: 僅有架構規劃，尚未實作
+
+## Evidence Rule
+
+Implementation status must be determined from repository evidence.
+
+Evidence may include:
+
+- Production Code
+- Database Migration
+- Routes
+- Configuration
+- Tests
+- Runtime verification
+
+Architecture diagrams, comments, README descriptions,
+or planned designs are not sufficient evidence by themselves.
+
+When documentation conflicts with implementation:
+
+1. Runtime behavior
+2. Production code
+3. Tests
+4. Database schema / configuration
+5. Documentation
+6. Planned design
+
+take precedence in determining current capability.
+
+Runtime evidence and actual implementation take precedence over documentation. Tests are verification evidence and must not be weakened merely to make documentation claims pass.
+
+When implementation exists but tests are incomplete: Do not claim full verification.
+When functionality is planned but not implemented: Do not describe it as a current capability.
+
+### Evidence Completeness Rule
+
+Implementation Status 不得僅根據「存在某個 class、migration 或 method」判定功能已完成。
+判定一項功能時，必須確認其完整流程：
+
+```text
+Route
+    ↓
+Middleware
+    ↓
+Authentication / Authorization
+    ↓
+Tenant Context
+    ↓
+Request Validation
+    ↓
+Controller
+    ↓
+Service / Domain Logic
+    ↓
+Model / Database
+    ↓
+Tests
+    ↓
+Runtime Verification（適用時）
+```
+
+對於具有資料一致性要求的功能，還必須確認：
+
+- Application Logic
+- Database Constraints
+- Transaction Boundary
+- Concurrency Behavior
+- Failure / Retry Behavior
+- Tenant Isolation
+- Relevant Tests
+  是否彼此一致。
+
+例如：
+`Point Lot / FIFO` 不能僅因為存在 `PointLot` Model、Migration 和 FIFO Query 就視為完整實作。
+必須確認：
+
+```text
+Earn
+    ↓
+Create Lot
+
+Redeem
+    ↓
+Consume Lot FIFO
+
+Refund
+    ↓
+Create Lot
+
+Adjust +
+    ↓
+Create Lot
+
+Adjust -
+    ↓
+Consume Lot FIFO
+
+Expire
+    ↓
+Consume / Expire Lot
+```
+
+並驗證：
+
+```text
+SUM(PointLot.remaining_points)
+    =
+PointAccount.balance
+```
+
+在所有會影響 Point Balance 的操作完成後仍成立。
+
+同樣地，Idempotency 不能僅因為存在：
+
+```text
+Idempotency-Key
+Idempotency Middleware
+idempotency_keys table
+UNIQUE(tenant_id, idempotency_key)
+```
+
+就視為完整實作。
+還必須驗證：
+
+- 相同 Tenant + 相同 Key 不重複執行 Business Operation
+- 相同 Key + 不同 Request Payload 會被拒絕
+- 不同 Tenant 可以使用相同 Key
+- 已完成 Request 可以正確 Replay Response
+- Duplicate Request 不會建立第二筆 PointTransaction
+- Concurrent Duplicate Request 不會造成重複扣點或加點
+- Replay 的 HTTP Status / Response Contract 符合既有 API 行為
+
+如果上述必要條件尚未全部驗證，不得標記為完整 `Implemented`.
+
+---
+
+## Implemented
+
+### Multi-Tenancy
+
+- **Tenant model**: 已實作 [app/Models/Tenant.php](app/Models/Tenant.php)
+- **User tenant_id**: 已實作，使用者綁定租戶 [database/migrations/2026_09_15_022027_add_tenant_id_to_users_table.php](database/migrations/2026_09_15_022027_add_tenant_id_to_users_table.php)
+- **TenantResolver**: 已實作 [app/Support/Tenancy/TenantResolver.php](app/Support/Tenancy/TenantResolver.php)
+- **TenantContext**: 已實作 [app/Support/Tenancy/TenantContext.php](app/Support/Tenancy/TenantContext.php)
+- **BelongsToTenant**: 已實作全域租戶範圍 [app/Models/Concerns/BelongsToTenant.php](app/Models/Concerns/BelongsToTenant.php)
+- **Global Scope**: 已實作，自動套用租戶過濾
+- **Super Admin bypass**: 已實作，Super Admin (tenant_id = null) 可跳過租戶隔離
+- **Tenant Admin isolation**: 已實作，一般使用者只能存取所屬租戶資料
+- **測試覆蓋**: TenantIsolationTest、SuperAdminTenantTest、TenantAdminPermissionTest [tests/Feature/](tests/Feature/)
+
+### Authentication
+
+- **JWT**: 已實作 API 認證，使用 tymon/jwt-auth [config/jwt.php](config/jwt.php)
+- **Web Session**: Filament 後台使用標準 Laravel Web Session
+- **Guards**: api (JWT) + web 雙守護程序
+- **Middleware**: auth:api、tenant 中間件實作 [app/Http/Middleware/TenantMiddleware.php](app/Http/Middleware/TenantMiddleware.php)
+- **Token lifecycle**: Login/Logout/Refresh/Me 已完整實作
+- **測試覆蓋**: AuthApiTest [tests/Feature/AuthApiTest.php](tests/Feature/AuthApiTest.php)
+
+### Point System Core
+
+- **PointService**: 已完整實作核心點數服務 [app/Services/Point/PointService.php](app/Services/Point/PointService.php)
+- **PointAccount**: 已實作，記錄當前餘額 [app/Models/PointAccount.php](app/Models/PointAccount.php)
+- **PointTransaction**: 已實作，交易分類帳 [app/Models/PointTransaction.php](app/Models/PointTransaction.php)
+- **lockForUpdate()**: 已實作，資料庫行鎖
+- **Redis Lock**: 已實作，分散式鎖
+- **DB Transaction**: 已實作，交易原子性保證
+- **Deadlock Retry**: 已實作，DB::transaction 重試機制
+- **核心規範**: 任何影響 PointAccount.balance 的操作，必須透過 PointService 統一處理，同步維持 PointLot 與 PointTransaction 會計不變量
+- **會計不變量**: 必須保持 `SUM(PointLot.remaining_points) = PointAccount.balance` 成立，所有影響餘額的操作都需驗證此不變量
+- **高並發架構**:
+    ```text
+    Redis Lock
+          ↓
+    DB Transaction
+          ↓
+    PointAccount lockForUpdate
+          ↓
+    PointLot lockForUpdate
+    ```
+
+### Queue Infrastructure
+
+- **Laravel Queue infrastructure**: 已安裝並設定 [config/queue.php](config/queue.php)
+- **Redis queue configuration**: 已完成，支援 Redis 驅動
+- **Business-specific asynchronous jobs**: 規劃中
+
+### API v1
+
+- **routes/api.php**: 已實作 v1 API 路由 [routes/api.php](routes/api.php)
+- **實際 API 領域**: Authentication、Customers、Points、PointAccounts、PointTransactions
+- **Controller**: 已實作 API 控制器 [app/Http/Controllers/Api/V1/](app/Http/Controllers/Api/V1/)
+- **Middleware aliases**: 已註冊 idempotent、tenant 中間件別名
+- **Request Validation**: 透過 Form Requests 或 Laravel 驗證機制實作
+- **測試覆蓋**: CustomerApiTest [tests/Feature/Api/V1/CustomerApiTest.php](tests/Feature/Api/V1/CustomerApiTest.php)
+
+### Swagger / OpenAPI
+
+- **L5-Swagger**: 已安裝 darkaonline/l5-swagger [config/l5-swagger.php](config/l5-swagger.php)
+- **OpenAPI Attributes**: 已使用
+- **/api/documentation**: 可存取
+- **API 前綴**: `/api/v1`，無重複路徑問題
+
+### Basic API Rate Limiting
+
+- **Laravel RateLimiter**: 已使用基礎速率限制 `throttle:api`
+- **Route throttle**: 已在所有 API 路由套用
+- **目前限制**: 以 Laravel 預設全域速率限制為基礎，尚未以 Tenant 為獨立隔離單位
+
+---
+
+## Implemented — Core (Validation In Progress)
+
+### Point Lot / FIFO
+
+- **核心操作全部實作**:
+    - Earn: PointAccount += amount + PointTransaction = EARN + PointLot += amount ✅
+    - Redeem: PointLot FIFO consumption + PointAccount -= amount + PointTransaction = REDEEM ✅
+    - Refund: PointAccount += amount + PointTransaction = REFUND + PointLot += amount ✅
+    - Adjust positive: PointAccount += amount + PointTransaction = ADJUST + PointLot += amount ✅
+    - Adjust negative: PointLot FIFO consumption + PointAccount -= amount + PointTransaction = ADJUST ✅
+    - Expire: PointLot FIFO consumption + PointAccount -= amount + PointTransaction = EXPIRE ✅
+- **會計不變量**: 需驗證永遠保證 `SUM(PointLot.remaining_points) = PointAccount.balance` (程式碼維護一致性，驗證中)
+- **FIFO 排序**: `earned_at ASC, id ASC` [app/Services/Point/PointService.php](app/Services/Point/PointService.php)
+- **PointLot model**: 已實作 [app/Models/PointLot.php](app/Models/PointLot.php)
+- **point_lots migration**: 已建立 [database/migrations/2026_09_20_000002_create_point_lots_table.php](database/migrations/2026_09_20_000002_create_point_lots_table.php)
+- **測試覆蓋**: 實際存在的測試檔案需透過專案掃描確認，目前已知路徑下存在 PointLotFifoTest.php、PointServiceConcurrencyTest.php、PointTransactionConcurrencyTest.php [tests/Feature/Services/Point/](tests/Feature/Services/Point/)
+- **目前狀態**: 目前 Point Lot / FIFO 核心流程已建立，實際各點數操作是否完整維持 PointAccount、PointLot、PointTransaction 三者會計不變量，以目前 PointService 與相關測試驗證結果為準，剩餘工作仍需完整驗證所有邊緣場景，並長期觀察生產環境運行狀況
+
+### Database Idempotency
+
+- **Database-backed idempotency mechanism**: 已建立
+- **idempotency_keys migration**: UNIQUE(tenant_id, idempotency_key) 已實作 [database/migrations/2026_09_20_000001_create_idempotency_keys_table.php](database/migrations/2026_09_20_000001_create_idempotency_keys_table.php)
+- **Idempotency model**: 已實作 [app/Models/IdempotencyKey.php](app/Models/IdempotencyKey.php)
+- **處理狀態**: processing/completed/failed 已建立
+- **回應重放機制**: 已實作
+- **實際套用範圍**: 僅套用在需要冪等性保護的點數變更路由 (POST /customers/{customer}/point-transactions, POST /customers/{customer}/points/redeem)
+- **DatabaseIdempotencyMiddleware**: [app/Http/Middleware/DatabaseIdempotencyMiddleware.php](app/Http/Middleware/DatabaseIdempotencyMiddleware.php)
+- **測試覆蓋**: DatabaseIdempotencyTest [tests/Feature/Services/Idempotency/DatabaseIdempotencyTest.php](tests/Feature/Services/Idempotency/DatabaseIdempotencyTest.php)
+- **目前狀態**: 核心機制已建立，但基本 replay / duplicate execution 測試尚未全部通過，仍在驗證與修正階段
+
+---
+
+## Not Yet Fully Verified
+
+### Real Multi-process / Multi-worker HTTP Concurrency
+
+- **目前測試已驗證**:
+    - Transaction atomicity
+    - lockForUpdate behavior
+    - Redis lock flow
+    - insufficient balance protection
+    - sequential stress scenarios
+- **目標驗證場景 (Expected Scenario)**:
+
+    ```text
+    Initial balance = 100
+    10 concurrent redeem attempts
+    Each redeem = 20
+
+    Expected invariant:
+    - Maximum successful redemptions = 5
+    - Remaining balance = 0
+    - No negative balance
+    - No duplicated ledger effects
+    ```
+
+- **Current automated tests validate locking and transaction correctness, but do not yet represent true multi-process HTTP concurrency.**
+- **尚未驗證**:
+    - multi-process concurrency
+    - multi-worker concurrency
+    - real HTTP concurrent requests
+    - k6 / wrk load test
+
+---
+
+## Planned
+
+### Domain Events & Async Processing
+
+- **Domain Events**: 規劃中
+- **Outbox pattern**: 尚未實作
+- **Webhook delivery**: 尚未實作
+- **Business-specific Jobs**: 規劃中
+
+### External System Adapters / Integrations
+
+- **Current REST API**: 已提供第三方系統整合介面，可供 Website/Mobile App/POS/E-commerce/CRM 等系統使用
+- **External system connectors (Salesforce/POS/CRM etc.)**: 尚未實作
+
+### Tenant-aware Rate Limiting
+
+- 目前已提供 Laravel 基礎 API Rate Limiting
+- 未來如實際流量與業務需求需要，再評估實作以 Tenant 為獨立隔離單位的速率限制
+
+---
+
+## 技術堆疊 (實際版本)
+
+- PHP 8.2+ (constraint: ^8.2)
+- Laravel 12.69.2 (constraint: ^12.0)
+- Filament 5.8 (constraint: ^5.8)
+- Livewire 4.4 (constraint: ^4.4)
+- tymon/jwt-auth 2.3 (constraint: ^2.3)
+- darkaonline/l5-swagger 11.1 (constraint: ^11.1)
+- bezhansalleh/filament-shield 4.3.1 (constraint: 4.3.1)

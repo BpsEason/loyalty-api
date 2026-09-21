@@ -188,25 +188,6 @@ class PointTransactionController extends Controller
 
         $validated = $request->validated();
 
-        // 冪等性檢查：如果有傳入 Idempotency-Key 標頭，檢查是否已處理過此請求
-        $idempotencyKey = $request->header('Idempotency-Key');
-        if ($idempotencyKey && $tenant) {
-            $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
-            $cachedTransactionId = cache()->get($cacheKey);
-            if ($cachedTransactionId) {
-                $existingTransaction = PointTransaction::find($cachedTransactionId);
-                if ($existingTransaction) {
-                    return ApiResponse::success(
-                        data: new PointTransactionResource($existingTransaction),
-                        message: 'Point transaction retrieved (idempotent)',
-                        status: 200
-                    );
-                }
-                // 快取存在但交易不存在，清除過期快取
-                cache()->forget($cacheKey);
-            }
-        }
-
         try {
             $method = match ($validated['type']) {
                 PointTransaction::TYPE_EARN => 'earn',
@@ -224,12 +205,6 @@ class PointTransactionController extends Controller
                 reference: $validated['reference'] ?? null,
                 createdBy: auth()->id()
             );
-
-            // 儲存冪等性快取
-            if ($idempotencyKey && $tenant) {
-                $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
-                cache()->put($cacheKey, $transaction->id, now()->addHours(24));
-            }
 
             return ApiResponse::success(
                 data: new PointTransactionResource($transaction),
@@ -289,7 +264,7 @@ class PointTransactionController extends Controller
             ),
         ]
     )]
-    public function redeem(Request $request, Customer $customer, PointService $pointService, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
+    public function redeem(PointTransactionStoreRequest $request, Customer $customer, PointService $pointService, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
     {
         // 確保客戶屬於當前租戶
         $tenant = $tenantContext->getTenant();
@@ -298,30 +273,7 @@ class PointTransactionController extends Controller
             return ApiResponse::error('Customer not found', null, [], 404);
         }
 
-        $validated = $request->validate([
-            'amount' => 'required|integer|min:1',
-            'description' => 'nullable|string',
-            'reference' => 'nullable|string',
-        ]);
-
-        // 冪等性檢查：如果有傳入 Idempotency-Key 標頭，檢查是否已處理過此請求
-        $idempotencyKey = $request->header('Idempotency-Key');
-        if ($idempotencyKey && $tenant) {
-            $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
-            $cachedTransactionId = cache()->get($cacheKey);
-            if ($cachedTransactionId) {
-                $existingTransaction = PointTransaction::find($cachedTransactionId);
-                if ($existingTransaction) {
-                    return ApiResponse::success(
-                        data: new PointTransactionResource($existingTransaction),
-                        message: 'Points retrieved (idempotent)',
-                        status: 200
-                    );
-                }
-                // 快取存在但交易不存在，清除過期快取
-                cache()->forget($cacheKey);
-            }
-        }
+        $validated = $request->validated();
 
         try {
             $transaction = $pointService->redeem(
@@ -331,12 +283,6 @@ class PointTransactionController extends Controller
                 reference: $validated['reference'] ?? null,
                 createdBy: auth()->id()
             );
-
-            // 儲存冪等性快取
-            if ($idempotencyKey && $tenant) {
-                $cacheKey = "idempotency:{$tenant->id}:{$idempotencyKey}";
-                cache()->put($cacheKey, $transaction->id, now()->addHours(24));
-            }
 
             return ApiResponse::success(
                 data: new PointTransactionResource($transaction),
