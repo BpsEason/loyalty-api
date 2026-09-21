@@ -94,6 +94,54 @@ Tenant C ─┘
     - Laravel等框架對此模式支援有限
     - 遷移管理複雜，需要為所有租戶的Schema運行遷移
 
+## Super Admin 跨租戶操作安全規範與審計要求
+
+### 超級管理員的安全邊界
+
+只有平台級的Super Admin角色才能跳過Global Scope的租戶隔離，進行跨租戶操作。其權限受到嚴格限制：
+
+1. **最小權限原則**：Super Admin僅能執行平台運維必需的跨租戶操作，包括：
+    - 租戶數據遷移或備份
+    - 緊急故障排查與數據修正
+    - 平台級的統計報表生成
+    - 用戶投訴的人工核查
+
+2. **操作前置確認**：所有跨租戶寫操作必須：
+    - 在操作界面明確提示即將修改的租戶ID和資源信息
+    - 要求管理員輸入操作備註（至少10個字）
+    - 支持二次確認，防止誤操作
+
+### 強制審計要求
+
+所有Super Admin的跨租戶操作都被強制記錄審計日誌，不可刪除或修改：
+
+1. **審計日誌必填字段**：
+    - 操作人ID、帳號、姓名
+    - 操作時間戳（精確到毫秒）
+    - 操作類型（讀/寫/刪除）
+    - 涉及的租戶ID、資源類型、資源ID
+    - 修改前後的數據快照（僅寫操作需要）
+    - 操作備註
+    - 請求的IP地址和User-Agent
+
+2. **審計日誌存儲**：
+    - 獨立於業務數據庫的審計日誌存儲，保留至少1年
+    - 日誌一經寫入不可修改，只追加
+    - 每日自動備份審計日誌到離線存儲
+
+3. **異常操作告警**：
+    - 監控Super Admin的操作頻率，1小時內跨租戶寫操作超過10次觸發告警
+    - 非工作時間（00:00-06:00）的跨租戶寫操作立即告警
+    - 未知IP來源的Super Admin登錄和操作立即告警
+
+### 程式碼層級的強制保證
+
+- [BelongsToTenant trait](../../app/Models/Concerns/BelongsToTenant.php) 中，只有通過明確的`withoutTenancy()`方法才能跳過全局作用域
+- 所有調用`withoutTenancy()`的地方都必須記錄審計日誌
+- 所有`withoutTenancy()`的呼叫點必須通過Code Review強制檢查，並在CI中加入靜態掃描規則
+- Filament後台的跨租戶資源訪問都被中間件截獲並記錄
+- API層的跨租戶寫操作需要額外的簽權驗證，防止前端直接調用
+
 ## Major Risk: Tenant Isolation Failure
 
 > **Tenant isolation failure is a correctness/security issue, not merely a filtering issue.**
