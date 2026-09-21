@@ -48,11 +48,15 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 # 設定工作目錄
 WORKDIR /var/www
 
-# 複製專案檔案
-COPY . .
+# 複製 composer 檔案以利用Docker層級快取
+COPY composer.json composer.lock ./
 
-# 安裝 PHP 依賴
-RUN composer install --optimize-autoloader --no-dev
+# 安裝所有 PHP 依賴（包含開發依賴，支援 phpunit 測試）
+# 先只複製composer檔案來利用Docker的快取機制，避免每次更動原始碼都重新安裝依賴
+RUN composer install --optimize-autoloader
+
+# 複製剩餘的專案檔案
+COPY . .
 
 # 設定權限
 RUN chown -R www-data:www-data /var/www \
