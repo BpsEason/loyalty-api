@@ -82,6 +82,9 @@ Detailed architecture decisions are documented under `/docs/adr`.
 | ADR-003 | Redis + DB Transaction + Row Lock | ✅ Implemented |
 | ADR-004 | JWT Authentication                | ✅ Implemented |
 | ADR-005 | No Microservices Yet              | ✅ Implemented |
+| ADR-006 | Idempotency Strategy              | ✅ Implemented |
+| ADR-007 | Point Lot & Expiration Strategy   | ✅ Implemented |
+| ADR-008 | Coupon System                     | 🚧 In Progress |
 
 ---
 
@@ -186,19 +189,50 @@ Redis 分散式鎖
 
 # 8. Idempotency
 
-冪等性保證同一個用戶端請求不論執行多少次，都只會對伺服器端狀態產生一次改變。這對於處理網路超時後的用戶端重試至關重要。
+冪等性保證同一個用戶端請求不論執行多少次，都只會對伺服器端狀態產生一次改變。這對於處理網路超時後的用戶端重試至關重要。本系統遵循ADR-006的核心原則：**資料庫為唯一權威，Redis僅作快取**。
+
+## 核心架構
+
+```text
+Client Request (with Idempotency-Key header)
+        ↓
+DatabaseIdempotencyMiddleware
+        ↓
+檢查資料庫中是否存在該(tenant_id, idempotency_key)記錄
+        ├─ 存在且COMPLETED → 直接返回緩存的響應
+        ├─ 存在且PROCESSING → 返回409 Conflict提示處理中
+        └─ 不存在 → 創建PROCESSING狀態記錄，繼續處理請求
+                ↓
+請求處理完成 → 更新記錄為COMPLETED，存儲響應內容
+                ↓
+返回響應給用戶端
+```
 
 ## 實作機制
 
-- **Idempotency-Key Header**：用戶端在每個 POST 請求中攜帶唯一的冪等性金鑰
-- **租戶隔離的快取鍵**：`idempotency:{tenantId}:{idempotencyKey}` 避免跨租戶金鑰碰撞
-- **Redis 快取成功回應**：成功的交易結果會被快取 24 小時，重複的相同金鑰請求會直接返回快取結果
-- **僅快取成功回應**：只有 HTTP 200/201 的回應會被快取，失敗的請求允許重試
+### 資料庫層核心實現
+
+- **唯一約束**：`idempotency_keys`表建立`unique(tenant_id, idempotency_key)`複合唯一索引
+- **行鎖保護**：查詢冪等性記錄時使用`lockForUpdate()`，防止並發場景下的競爭條件
+- **狀態機制**：
+    - `processing`：請求正在處理中
+    - `completed`：請求處理成功完成
+    - `failed`：請求處理失敗，可重試
+- **過期清理**：定時任務清理7天前的completed記錄，以及5分鐘以上的stale processing記錄
+
+### Redis 輔助快取策略
+
+- 僅用於快取completed狀態的響應，降低資料庫查詢壓力
+- 快取TTL設置為24小時，最終一致性依賴資料庫
+- 當Redis不可用時，自動降級為直接查詢資料庫，不影響核心一致性
+- 絕不依賴Redis存儲processing狀態，避免緩存丟失導致重複執行
 
 ## 適用的 API 端點
 
 - `POST /api/v1/customers/{customer}/point-transactions`
 - `POST /api/v1/customers/{customer}/points/redeem`
+- `POST /api/v1/coupon-templates/{template}/claim`（優惠券領取）
+- `POST /api/v1/user-coupons/{userCoupon}/redeem`（優惠券核銷）
 
 ---
 
@@ -214,6 +248,10 @@ Redis 分散式鎖
 4. **資料庫死鎖 (Deadlock)**：透過交易自動重試機制處理
 5. **Redis 不可用 (Redis Unavailable)**：資料庫行鎖仍能提供基本的一致性保證
 6. **網路分區 (Network Partition)**：等待鎖自動釋放後重試
+7. **優惠券超發 (Coupon Overissue)**：透過模板級Redis鎖 + CouponTemplate行鎖 + used_count原子更新防護
+8. **優惠券重複核銷 (Coupon Double Redeem)**：透過UserCoupon行鎖 + redemption_id唯一約束 + 狀態機約束防護
+9. **混合支付狀態不一致 (Hybrid Payment Inconsistency)**：透過同一資料庫事務包裝所有操作，要麼全部成功要麼全部回滾
+10. **過期優惠券被使用 (Expired Coupon Redemption)**：透過核銷前強檢查 + 列表查詢即時過濾 + 定時任務批量處理防護
 
 ---
 
@@ -227,9 +265,15 @@ Tenant
    ├── Users (系統使用者：Super Admin / Tenant Admin / Staff)
    ├── Customers (會員客戶)
    │      │
-   │      └── PointAccount (每個客戶一個點數帳戶)
-   │              │
-   │              └── PointTransaction (所有點數交易明細)
+   │      ├── PointAccount (每個客戶一個點數帳戶)
+   │      │        │
+   │      │        └── PointTransaction (所有點數交易明細)
+   │      │
+   │      └── UserCoupon (會員持有的優惠券)
+   │               │
+   │               └── CouponRedemption (優惠券核銷記錄)
+   │
+   ├── CouponTemplates (優惠券模板)
    │
    └── Campaigns (行銷活動)
           │
@@ -490,7 +534,7 @@ PointLot
 
 ## 19. Coupon Domain
 
-優惠券系統由三層核心模型組成，負責從規則定義到實際核銷的完整生命週期管理：
+優惠券系統由三層核心模型組成，負責從規則定義到實際核銷的完整生命週期管理，完整設計遵循[ADR-008: Coupon System](../docs/adr/ADR-008-coupon-system.md)。
 
 ```text
 CouponTemplate
@@ -500,11 +544,38 @@ UserCoupon
 CouponRedemption
 ```
 
-### 核心職責
+### 支援的台灣常見券種
 
-- **CouponTemplate**: 優惠券規則定義，包含折扣類型、有效期、發行數量等配置
-- **UserCoupon**: 會員持有的具體優惠券實體，記錄領取時間與當前狀態
-- **CouponRedemption**: 優惠券核銷記錄，保存實際使用時的交易資訊與折扣金額
+系統優先支援台灣電商與實體零售的主流場景：
+
+- 金額折扣券（如NT$100折價券）
+- 比例折扣券（如全館85折）
+- 滿額減免券（如滿NT$500減NT$50）
+- 滿件折扣券（如買3件第2件半價）
+- 買一送一券
+- 免運費券
+- 點數加成券（消費獲得多倍點數）
+
+### 核心模型職責
+
+- **CouponTemplate**: 優惠券規則定義，包含折扣類型、有效期、發行數量、單用戶領取上限等配置
+- **UserCoupon**: 會員持有的具體優惠券實體，記錄領取時間、狀態（available/used/expired/cancelled）與過期時間
+- **CouponRedemption**: 優惠券核銷記錄，保存實際使用時的交易資訊、折扣金額、關聯訂單ID
+
+### 與點數系統的整合原則
+
+當交易同時使用優惠券和點數時，嚴格遵循以下規則：
+
+1. **計算順序**：先套用優惠券折扣，再基於折扣後的金額扣減點數
+2. **原子性保證**：優惠券狀態變更與點數扣減必須在同一資料庫事務中完成，要麼全部成功，要麼全部回滾
+3. **鎖定順序**：與ADR-003完全對齊，嚴格按ID升序獲取鎖，避免死鎖：先鎖定UserCoupon，再鎖定PointAccount，最後鎖定需要修改的PointLot
+4. **一致性模型**：共用同一套冪等性、分散式鎖、行鎖機制，確保優惠券與點數系統的一致性保證等級完全一致
+
+### 多層防護機制
+
+- **超發防護**：模板級Redis鎖 + 資料庫行鎖 + used_count原子更新 + 每日校驗任務
+- **重複核銷防護**：UserCoupon行鎖 + redemption_id唯一約束 + 狀態機約束 + 冪等性中間件
+- **過期處理**：每日定時任務批量處理 + 列表查詢即時過濾 + 核銷前強檢查
 
 完整的優惠券系統設計文件請參考：`docs/design/coupon.md`
 
