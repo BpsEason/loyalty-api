@@ -447,7 +447,137 @@ API 使用 L5-Swagger / OpenAPI 自動生成文件，可透過 `/api/documentati
 - 點數帳戶與交易查詢
 - 使用者與權限管理
 - 行銷活動管理
+- 優惠券管理
 
 核心業務邏輯（點數交易）仍集中在 Service Layer，不論是 API 還是後台操作都使用同一套一致性保證機制。
 
+## 18. Point Ledger & Point Lot
+
+Point Lot 是本系統用於實現精確點數追溯的核心機制，每一批點數都以 Lot 形式管理，確保點數的來源、有效期與消耗順序都可完整追蹤。
+
+### 核心模型
+
+```text
+PointLot
+├── tenant_id: 租戶隔離
+├── customer_id: 關聯會員
+├── point_account_id: 關聯點數帳戶
+├── original_points: 批次原始點數
+├── remaining_points: 剩餘可用點數
+├── earned_at: 獲得時間
+├── expired_at: 過期時間
+└── origin_transaction_id: 來源交易
+```
+
+### 實作狀態
+
+#### ✅ Implemented
+
+- `earn`: 建立新的點數批次
+- `redeem`: FIFO 順序消耗點數
+- `adjust+`: 新增點數批次
+- `adjust-`: FIFO 順序消耗調整
+- `refund`: 建立退款點數批次
+- `expire`: FIFO 順序處理過期點數
+
+#### 🚧 Remaining Work
+
+- 自動過期排程任務
+- 批次合併優化
+- 歷史批次歸檔機制
+
 ---
+
+## 19. Coupon Domain
+
+優惠券系統由三層核心模型組成，負責從規則定義到實際核銷的完整生命週期管理：
+
+```text
+CouponTemplate
+    ↓
+UserCoupon
+    ↓
+CouponRedemption
+```
+
+### 核心職責
+
+- **CouponTemplate**: 優惠券規則定義，包含折扣類型、有效期、發行數量等配置
+- **UserCoupon**: 會員持有的具體優惠券實體，記錄領取時間與當前狀態
+- **CouponRedemption**: 優惠券核銷記錄，保存實際使用時的交易資訊與折扣金額
+
+完整的優惠券系統設計文件請參考：`docs/design/coupon.md`
+
+---
+
+# 20. Documentation Structure
+
+本專案採用分層文件架構，將不同性質的技術文件歸類到對應目錄，保持 README 作為專案入口的簡潔性：
+
+```text
+docs/
+├── adr/                # Architecture Decision Records
+│   ├── ADR-001-modular-monolith.md
+│   ├── ADR-002-shared-database-tenancy.md
+│   ├── ADR-003-redis-db-lock.md
+│   ├── ADR-004-jwt-authentication.md
+│   └── ADR-005-no-microservices-yet.md
+│
+├── design/             # 系統設計細節
+│   ├── point-ledger.md
+│   ├── point-lot.md
+│   ├── coupon.md
+│   └── multi-tenancy.md
+│
+├── scalability/        # 可擴展性規劃
+│   ├── capacity-planning.md
+│   ├── load-testing.md
+│   └── database-sharding.md
+│
+└── failure-analysis/   # 失敗場景與容錯設計
+    ├── deadlock-handling.md
+    ├── network-partition.md
+    └── disaster-recovery.md
+```
+
+---
+
+# 21. Current Status
+
+## 核心功能完成度
+
+| 領域                    | 完成度 | 狀態        |
+| ----------------------- | ------ | ----------- |
+| Transaction Consistency | 95%    | ✅ 穩定運行 |
+| Concurrency Control     | 90%    | ✅ 穩定運行 |
+| Multi-Tenant Isolation  | 100%   | ✅ 完整實作 |
+| Point Ledger            | 100%   | ✅ 穩定運行 |
+| Point Lot FIFO          | 95%    | 🚧 完善中   |
+| Idempotency             | 100%   | ✅ 完整實作 |
+| Coupon System           | 85%    | 🚧 完善中   |
+
+## 生產環境就緒度
+
+- ✅ 核心交易流程穩定
+- ✅ 租戶隔離機制完整
+- ✅ 併發保護機制到位
+- ⚠️ 效能基準測試進行中
+- ⚠️ 災難回復流程驗證中
+
+---
+
+# 22. Development Philosophy
+
+本專案的開發遵循以下核心原則：
+
+1. **Correctness First**: 正確性永遠優先於效能，交易一致性是不可妥協的底線
+2. **Defensive Programming**: 每一層都做驗證，確保壞的狀態無法進入系統
+3. **Auditable Everything**: 所有關鍵狀態變更都留下不可篡改的記錄
+4. **Simple Over Easy**: 理解簡單的複雜，勝過理解複雜的簡單
+5. **Single Source of Truth**: 核心業務邏輯只實作一次，不論是 API 還是後台操作都使用同一套機制
+
+---
+
+# API Documentation
+
+完整的 API 使用文件由 OpenAPI/Swagger 自動生成，請訪問 `/api/documentation` 查看。
