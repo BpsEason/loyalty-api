@@ -26,15 +26,13 @@ class SuperAdminTenantTest extends TestCase
 
         $panel = Filament::getCurrentOrDefaultPanel();
 
-        // 首次登入或無 Session 時，回傳第一個可用租戶
+        // Super Admin 永遠不預設任何租戶，保持全域存取（符合目前實作）
         $defaultTenant = $superAdmin->getDefaultTenant($panel);
-        $this->assertEquals($tenantA->id, $defaultTenant->id);
+        $this->assertNull($defaultTenant);
 
-        // 當 Super Admin 切換至 Tenant B，Session 記錄 filament_tenant_id = $tenantB->id
+        // 即使設定了 Session 中的租戶，Super Admin 仍然不會自動設定預設租戶
         session(['filament_tenant_id' => $tenantB->id]);
-
-        // 再次呼叫 getDefaultTenant 應回傳 Tenant B
-        $this->assertEquals($tenantB->id, $superAdmin->getDefaultTenant($panel)->id);
+        $this->assertNull($superAdmin->getDefaultTenant($panel));
     }
 
     public function test_super_admin_sees_all_users_in_user_resource(): void

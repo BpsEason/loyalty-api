@@ -149,7 +149,7 @@ class PointServiceConcurrencyTest extends TestCase
         $totalRedeemed = PointTransaction::where('point_account_id', $this->pointAccount->id)
             ->where('type', PointTransaction::TYPE_REDEEM)
             ->sum('amount');
-        $this->assertSame(100, $totalRedeemed, '總兌換點數應該等於100');
+        $this->assertEquals(100, $totalRedeemed, '總兌換點數應該等於100');
     }
 
     /**
@@ -171,6 +171,6 @@ class PointServiceConcurrencyTest extends TestCase
         $this->assertSame(50, $this->pointAccount->balance);
 
         $sumRemaining = PointLot::where('point_account_id', $this->pointAccount->id)->sum('remaining_points');
-        $this->assertSame(50, $sumRemaining);
+        $this->assertEquals(50, $sumRemaining);
     }
 }
