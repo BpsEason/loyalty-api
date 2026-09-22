@@ -10,6 +10,8 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Schemas\Schema;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Grid;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
@@ -59,42 +61,80 @@ class PointAccountResource extends Resource
     {
         return $schema
             ->schema([
-                \App\Forms\Components\TenantSelect::make()
-                    ->reactive(),
-                Forms\Components\Select::make('customer_id')
-                    ->label('客戶')
-                    ->relationship('customer', 'name', function ($query, $get) {
-                        $user = auth()->user();
-                        $panel = filament()->getCurrentOrDefaultPanel();
-                        $tenantId = $get('tenant_id');
+                Section::make('點數帳戶')
+                    ->description('設定此點數帳戶所屬的租戶與客戶')
+                    ->schema([
+                        Grid::make(2)
+                            ->schema([
+                                \App\Forms\Components\TenantSelect::make()
+                                    ->reactive()
+                                    ->columnSpan(1),
+                                Forms\Components\Select::make('customer_id')
+                                    ->label('客戶')
+                                    ->relationship('customer', 'name', function ($query, $get) {
+                                        $user = auth()->user();
+                                        $panel = filament()->getCurrentOrDefaultPanel();
+                                        $tenantId = $get('tenant_id');
 
-                        if ($user && $user->isSuperAdmin()) {
-                            // Super Admin 可以看到所有客戶（配合選取租戶過濾）
-                            if ($panel?->hasTenancy()) {
-                                $query->withoutGlobalScope($panel->getTenancyScopeName());
-                            }
-                            if ($tenantId) {
-                                $query->where('tenant_id', $tenantId);
-                            }
-                        }
-                        // Tenant Admin 由Model全域範圍自動處理，無需手動過濾
+                                        if ($user && $user->isSuperAdmin()) {
+                                            // Super Admin 可以看到所有客戶（配合選取租戶過濾）
+                                            if ($panel?->hasTenancy()) {
+                                                $query->withoutGlobalScope($panel->getTenancyScopeName());
+                                            }
+                                            if ($tenantId) {
+                                                $query->where('tenant_id', $tenantId);
+                                            }
+                                        }
+                                        // Tenant Admin 由Model全域範圍自動處理，無需手動過濾
 
-                        return $query;
-                    })
-                    ->required()
-                    ->searchable(),
-                Forms\Components\TextInput::make('balance')
-                    ->required()
-                    ->numeric()
-                    ->default(0),
-                Forms\Components\TextInput::make('total_earned')
-                    ->required()
-                    ->numeric()
-                    ->default(0),
-                Forms\Components\TextInput::make('total_redeemed')
-                    ->required()
-                    ->numeric()
-                    ->default(0),
+                                        return $query;
+                                    })
+                                    ->required()
+                                    ->searchable()
+                                    ->preload()
+                                    ->columnSpan(1),
+                            ]),
+                    ])
+                    ->columnSpanFull(),
+
+                Section::make('點數餘額')
+                    ->description('查看與管理此帳戶目前的點數狀態')
+                    ->schema([
+                        Forms\Components\TextInput::make('balance')
+                            ->label('目前餘額')
+                            ->required()
+                            ->numeric()
+                            ->default(0)
+                            ->suffix('點')
+                            ->helperText('此客戶當前可用的點數餘額')
+                            ->columnSpanFull(),
+                    ])
+                    ->columnSpanFull(),
+
+                Section::make('點數累積')
+                    ->description('查看此帳戶的點數累積統計')
+                    ->schema([
+                        Grid::make(2)
+                            ->schema([
+                                Forms\Components\TextInput::make('total_earned')
+                                    ->label('累積獲得')
+                                    ->required()
+                                    ->numeric()
+                                    ->default(0)
+                                    ->suffix('點')
+                                    ->helperText('此帳戶累積獲得的總點數')
+                                    ->columnSpan(1),
+                                Forms\Components\TextInput::make('total_redeemed')
+                                    ->label('累積兌換')
+                                    ->required()
+                                    ->numeric()
+                                    ->default(0)
+                                    ->suffix('點')
+                                    ->helperText('此帳戶累積兌換使用的總點數')
+                                    ->columnSpan(1),
+                            ]),
+                    ])
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -105,33 +145,48 @@ class PointAccountResource extends Resource
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('客戶')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('balance')
-                    ->label('餘額')
+                    ->searchable()
+                    ->sortable()
+                    ->weight('bold')
+                    ->description(fn(PointAccount $record) => $record->tenant?->name ?? ''),
+                Tables\Columns\BadgeColumn::make('balance')
+                    ->label('目前餘額')
                     ->numeric()
-                    ->sortable(),
+                    ->sortable()
+                    ->weight('bold')
+                    ->color('success')
+                    ->formatStateUsing(fn($state) => number_format($state) . ' 點')
+                    ->alignRight(),
                 Tables\Columns\TextColumn::make('total_earned')
                     ->label('累積獲得')
                     ->numeric()
-                    ->sortable(),
+                    ->sortable()
+                    ->formatStateUsing(fn($state) => number_format($state) . ' 點')
+                    ->alignRight(),
                 Tables\Columns\TextColumn::make('total_redeemed')
                     ->label('累積兌換')
                     ->numeric()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('tenant.name')
+                    ->sortable()
+                    ->formatStateUsing(fn($state) => number_format($state) . ' 點')
+                    ->alignRight(),
+                Tables\Columns\BadgeColumn::make('tenant.name')
                     ->label('租戶')
                     ->searchable()
-                    ->visible(fn() => auth()->user()->hasRole('super_admin')),
+                    ->visible(fn() => auth()->user()->hasRole('super_admin'))
+                    ->color('info'),
             ])
             ->filters([
                 //
             ])
             ->actions([
-                \Filament\Actions\EditAction::make(),
+                \Filament\Actions\EditAction::make()
+                    ->tooltip('編輯點數帳戶')
+                    ->icon('heroicon-o-pencil'),
             ])
             ->bulkActions([
                 \Filament\Actions\BulkActionGroup::make([
-                    \Filament\Actions\DeleteBulkAction::make(),
+                    \Filament\Actions\DeleteBulkAction::make()
+                        ->requiresConfirmation(),
                 ]),
             ]);
     }

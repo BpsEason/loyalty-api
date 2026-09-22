@@ -12,6 +12,8 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Infolists;
 use Filament\Infolists\Infolist;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Grid;
 use Illuminate\Database\Eloquent\Builder;
 use UnitEnum;
 use BackedEnum;
@@ -54,65 +56,99 @@ class UserCouponResource extends Resource
     {
         return $schema
             ->components([
-                \Filament\Schemas\Components\Section::make('基本資訊')
+                Section::make('優惠券資訊')
+                    ->description('此會員優惠券的核心資訊')
                     ->schema([
-                        \Filament\Infolists\Components\TextEntry::make('customer.name')
-                            ->label('會員'),
-                        \Filament\Infolists\Components\TextEntry::make('couponTemplate.name')
-                            ->label('優惠券'),
-                        \Filament\Infolists\Components\TextEntry::make('couponTemplate.type')
-                            ->label('優惠券類型')
-                            ->badge()
-                            ->formatStateUsing(fn(string $state): string => match ($state) {
-                                CouponTemplate::TYPE_FIXED_AMOUNT => '固定金額',
-                                CouponTemplate::TYPE_PERCENTAGE => '比例折扣',
-                                CouponTemplate::TYPE_FREE_SHIPPING => '免運費',
-                                CouponTemplate::TYPE_GIFT => '贈品',
-                                default => $state,
-                            }),
-                        \Filament\Infolists\Components\TextEntry::make('reference')
-                            ->label('券代碼'),
-                        \Filament\Infolists\Components\TextEntry::make('status')
-                            ->label('目前狀態')
-                            ->badge()
-                            ->formatStateUsing(fn(string $state): string => match ($state) {
-                                UserCoupon::STATUS_AVAILABLE => '可使用',
-                                UserCoupon::STATUS_USED => '已使用',
-                                UserCoupon::STATUS_EXPIRED => '已過期',
-                                UserCoupon::STATUS_CANCELLED => '已作廢',
-                                default => $state,
-                            }),
-                    ])->columns(3),
-                \Filament\Schemas\Components\Section::make('時間資訊')
+                        Grid::make(2)
+                            ->schema([
+                                Infolists\Components\TextEntry::make('customer.name')
+                                    ->label('會員')
+                                    ->weight('bold')
+                                    ->size('lg'),
+                                Infolists\Components\TextEntry::make('couponTemplate.name')
+                                    ->label('優惠券')
+                                    ->weight('bold')
+                                    ->size('lg'),
+                                Infolists\Components\TextEntry::make('reference')
+                                    ->label('券代碼')
+                                    ->copyable()
+                                    ->weight('medium'),
+                                Infolists\Components\TextEntry::make('status')
+                                    ->label('目前狀態')
+                                    ->badge()
+                                    ->size('lg')
+                                    ->color(fn(string $state): string => match ($state) {
+                                        UserCoupon::STATUS_AVAILABLE => 'success',
+                                        UserCoupon::STATUS_USED => 'info',
+                                        UserCoupon::STATUS_EXPIRED => 'warning',
+                                        UserCoupon::STATUS_CANCELLED => 'danger',
+                                        default => 'gray',
+                                    })
+                                    ->formatStateUsing(fn(string $state): string => match ($state) {
+                                        UserCoupon::STATUS_AVAILABLE => '可使用',
+                                        UserCoupon::STATUS_USED => '已使用',
+                                        UserCoupon::STATUS_EXPIRED => '已過期',
+                                        UserCoupon::STATUS_CANCELLED => '已作廢',
+                                        default => $state,
+                                    }),
+                                Infolists\Components\TextEntry::make('couponTemplate.type')
+                                    ->label('優惠券類型')
+                                    ->badge()
+                                    ->color('gray')
+                                    ->formatStateUsing(fn(string $state): string => match ($state) {
+                                        CouponTemplate::TYPE_FIXED_AMOUNT => '固定金額',
+                                        CouponTemplate::TYPE_PERCENTAGE => '比例折扣',
+                                        CouponTemplate::TYPE_FREE_SHIPPING => '免運費',
+                                        CouponTemplate::TYPE_GIFT => '贈品',
+                                        default => $state,
+                                    }),
+                            ]),
+                    ])
+                    ->columnSpanFull(),
+
+                Section::make('使用期限')
+                    ->description('優惠券的發放與有效時間')
                     ->schema([
-                        \Filament\Infolists\Components\TextEntry::make('issued_at')
-                            ->label('發放時間')
-                            ->dateTime(),
-                        \Filament\Infolists\Components\TextEntry::make('expired_at')
-                            ->label('有效期限')
-                            ->dateTime(),
-                        \Filament\Infolists\Components\TextEntry::make('used_at')
-                            ->label('使用時間')
-                            ->dateTime()
-                            ->placeholder('尚未使用'),
-                    ])->columns(3),
-                \Filament\Schemas\Components\Section::make('核銷資訊')
+                        Grid::make(3)
+                            ->schema([
+                                Infolists\Components\TextEntry::make('issued_at')
+                                    ->label('發放時間')
+                                    ->dateTime(),
+                                Infolists\Components\TextEntry::make('expired_at')
+                                    ->label('有效期限')
+                                    ->dateTime(),
+                                Infolists\Components\TextEntry::make('used_at')
+                                    ->label('使用時間')
+                                    ->dateTime()
+                                    ->placeholder('尚未使用'),
+                            ]),
+                    ])
+                    ->columnSpanFull(),
+
+                Section::make('核銷資訊')
+                    ->description('此優惠券的核銷詳細資料')
                     ->schema([
-                        \Filament\Infolists\Components\TextEntry::make('redemption.reference')
-                            ->label('核銷參考編號')
-                            ->placeholder('尚未核銷'),
-                        \Filament\Infolists\Components\TextEntry::make('redemption.order_reference')
-                            ->label('訂單編號')
-                            ->placeholder('-'),
-                        \Filament\Infolists\Components\TextEntry::make('redemption.discount_amount')
-                            ->label('實際折抵金額')
-                            ->placeholder('-')
-                            ->formatStateUsing(fn($state) => $state ? 'NT$ ' . number_format($state) : '-'),
-                        \Filament\Infolists\Components\TextEntry::make('redemption.redeemed_at')
-                            ->label('核銷時間')
-                            ->dateTime()
-                            ->placeholder('尚未核銷'),
-                    ])->columns(2),
+                        Grid::make(2)
+                            ->schema([
+                                Infolists\Components\TextEntry::make('redemption.reference')
+                                    ->label('核銷參考編號')
+                                    ->placeholder('尚未核銷'),
+                                Infolists\Components\TextEntry::make('redemption.order_reference')
+                                    ->label('訂單編號')
+                                    ->placeholder('-'),
+                                Infolists\Components\TextEntry::make('redemption.discount_amount')
+                                    ->label('實際折抵金額')
+                                    ->placeholder('-')
+                                    ->weight('bold')
+                                    ->size('lg')
+                                    ->formatStateUsing(fn($state) => $state ? 'NT$ ' . number_format($state) : '-'),
+                                Infolists\Components\TextEntry::make('redemption.redeemed_at')
+                                    ->label('核銷時間')
+                                    ->dateTime()
+                                    ->placeholder('尚未核銷'),
+                            ]),
+                    ])
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -122,16 +158,19 @@ class UserCouponResource extends Resource
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('會員')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('couponTemplate.name')
-                    ->label('優惠券')
-                    ->searchable(),
+                    ->searchable()
+                    ->sortable()
+                    ->weight('bold')
+                    ->description(fn(UserCoupon $record) => $record->couponTemplate->name ?? ''),
                 Tables\Columns\TextColumn::make('reference')
                     ->label('券代碼')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('status')
+                    ->searchable()
+                    ->copyable()
+                    ->weight('medium'),
+                Tables\Columns\BadgeColumn::make('status')
                     ->label('狀態')
-                    ->badge()
+                    ->weight('bold')
+                    ->size('lg')
                     ->color(fn(string $state): string => match ($state) {
                         UserCoupon::STATUS_AVAILABLE => 'success',
                         UserCoupon::STATUS_USED => 'info',
@@ -146,22 +185,25 @@ class UserCouponResource extends Resource
                         UserCoupon::STATUS_CANCELLED => '已作廢',
                         default => $state,
                     }),
+                Tables\Columns\TextColumn::make('expired_at')
+                    ->label('有效期限')
+                    ->dateTime('m-d H:i')
+                    ->sortable()
+                    ->alignRight(),
                 Tables\Columns\TextColumn::make('issued_at')
                     ->label('發放時間')
-                    ->dateTime()
-                    ->sortable(),
+                    ->dateTime('m-d H:i')
+                    ->sortable()
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('used_at')
                     ->label('使用時間')
-                    ->dateTime()
+                    ->dateTime('m-d H:i')
                     ->placeholder('-')
                     ->toggleable(),
-                Tables\Columns\TextColumn::make('expired_at')
-                    ->label('過期時間')
-                    ->dateTime()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('tenant.name')
+                Tables\Columns\BadgeColumn::make('tenant.name')
                     ->label('租戶')
                     ->searchable()
+                    ->color('info')
                     ->visible(fn() => auth()->user()->hasRole('super_admin')),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('建立時間')
@@ -210,7 +252,9 @@ class UserCouponResource extends Resource
                     })),
             ])
             ->actions([
-                \Filament\Actions\ViewAction::make(),
+                \Filament\Actions\ViewAction::make()
+                    ->tooltip('查看優惠券詳情')
+                    ->icon('heroicon-o-eye'),
             ])
             ->bulkActions([]);
     }

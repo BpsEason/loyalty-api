@@ -95,9 +95,10 @@ class RoleResource extends Resource
     {
         return $schema
             ->components([
-                Grid::make()
+                Section::make('角色基本資訊')
+                    ->description('設定角色的基本識別資訊，用於系統權限管理')
                     ->schema([
-                        Section::make()
+                        Grid::make(3)
                             ->schema([
                                 TextInput::make('name')
                                     ->label(__('filament-shield::filament-shield.field.name'))
@@ -107,33 +108,42 @@ class RoleResource extends Resource
                                         modifyRuleUsing: fn(Unique $rule): Unique => Utils::isTenancyEnabled() ? $rule->where(Utils::getTenantModelForeignKey(), Filament::getTenant()?->id) : $rule
                                     )
                                     ->required()
-                                    ->maxLength(255),
+                                    ->maxLength(255)
+                                    ->placeholder('例如：tenant_admin、tenant_staff')
+                                    ->helperText('角色名稱將用於識別此角色及其權限範圍，不可重複')
+                                    ->columnSpan(1),
 
                                 TextInput::make('guard_name')
                                     ->label(__('filament-shield::filament-shield.field.guard_name'))
                                     ->default(Utils::getFilamentAuthGuard())
                                     ->nullable()
-                                    ->maxLength(255),
+                                    ->maxLength(255)
+                                    ->placeholder('web')
+                                    ->helperText('一般保持預設值即可')
+                                    ->columnSpan(1),
 
                                 Select::make(config('permission.column_names.team_foreign_key'))
-                                    ->label(__('filament-shield::filament-shield.field.team'))
-                                    ->placeholder(__('filament-shield::filament-shield.field.team.placeholder'))
+                                    ->label('所屬租戶')
+                                    ->placeholder('請選擇此角色所屬的租戶')
                                     /** @phpstan-ignore-next-line */
                                     ->default(Filament::getTenant()?->id)
                                     ->options(fn(): array => in_array(Utils::getTenantModel(), [null, '', '0'], true) ? [] : Utils::getTenantModel()::pluck('name', 'id')->toArray())
                                     ->visible(fn(): bool => static::shield()->isCentralApp() && Utils::isTenancyEnabled())
-                                    ->dehydrated(fn(): bool => static::shield()->isCentralApp() && Utils::isTenancyEnabled()),
-                                static::getSelectAllFormComponent(),
-
-                            ])
-                            ->columns([
-                                'sm' => 2,
-                                'lg' => 3,
-                            ])
-                            ->columnSpanFull(),
+                                    ->dehydrated(fn(): bool => static::shield()->isCentralApp() && Utils::isTenancyEnabled())
+                                    ->searchable()
+                                    ->helperText('只有 Super Admin 可以修改租戶設定，確保角色僅能在正確租戶使用')
+                                    ->columnSpan(1),
+                            ]),
                     ])
                     ->columnSpanFull(),
-                static::getShieldFormComponents(),
+
+                Section::make('權限設定')
+                    ->description('配置此角色擁有的系統權限，權限將套用給所有擁有此角色的使用者')
+                    ->schema([
+                        static::getSelectAllFormComponent(),
+                        static::getShieldFormComponents(),
+                    ])
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -143,39 +153,52 @@ class RoleResource extends Resource
         return $table
             ->columns([
                 TextColumn::make('name')
-                    ->weight(FontWeight::Medium)
+                    ->weight(FontWeight::Bold)
                     ->label(__('filament-shield::filament-shield.column.name'))
                     ->formatStateUsing(fn(string $state): string => Str::headline($state))
-                    ->searchable(),
-                TextColumn::make('guard_name')
-                    ->badge()
-                    ->color('warning')
-                    ->label(__('filament-shield::filament-shield.column.guard_name')),
+                    ->searchable()
+                    ->description(fn($record) => $record->guard_name)
+                    ->color(fn(string $state): string => match ($state) {
+                        'super_admin' => 'danger',
+                        'tenant_admin' => 'warning',
+                        'tenant_staff' => 'success',
+                        default => 'gray',
+                    }),
                 TextColumn::make('team.name')
                     ->default('Global')
                     ->badge()
                     ->color(fn(mixed $state): string => str($state)->contains('Global') ? 'gray' : 'primary')
-                    ->label(__('filament-shield::filament-shield.column.team'))
+                    ->label('所屬租戶')
                     ->searchable()
-                    ->visible(fn(): bool => static::shield()->isCentralApp() && Utils::isTenancyEnabled()),
+                    ->visible(fn(): bool => (auth()->user()?->isSuperAdmin() || (static::shield()->isCentralApp() && Utils::isTenancyEnabled())) && Utils::isTenancyEnabled()),
                 TextColumn::make('permissions_count')
                     ->badge()
-                    ->label(__('filament-shield::filament-shield.column.permissions'))
+                    ->label('權限數量')
                     ->counts('permissions')
-                    ->color('primary'),
+                    ->formatStateUsing(fn(int $state): string => $state . ' 個權限')
+                    ->color(fn(int $state): string => $state > 20 ? 'danger' : ($state > 10 ? 'warning' : 'success'))
+                    ->alignCenter(),
                 TextColumn::make('updated_at')
                     ->label(__('filament-shield::filament-shield.column.updated_at'))
-                    ->dateTime(),
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
                 //
             ])
             ->recordActions([
-                EditAction::make(),
-                DeleteAction::make(),
+                EditAction::make()
+                    ->tooltip('編輯角色')
+                    ->icon('heroicon-o-pencil'),
+                DeleteAction::make()
+                    ->tooltip('刪除角色')
+                    ->icon('heroicon-o-trash'),
             ])
             ->toolbarActions([
-                DeleteBulkAction::make(),
+                DeleteBulkAction::make()
+                    ->tooltip('批量刪除角色')
+                    ->icon('heroicon-o-trash'),
             ]);
     }
 
@@ -289,5 +312,27 @@ class RoleResource extends Resource
         }
 
         return false;
+    }
+
+    /**
+     * 覆蓋Shield的權限狀態設定方法，解決冒號不一致問題
+     * 資料庫權限名稱使用::（雙冒號），但Shield表單使用:（單冒號）
+     */
+    public static function setPermissionStateForRecordPermissions(\Filament\Schemas\Components\Component $component, string $operation, array $permissions, ?\Illuminate\Database\Eloquent\Model $record): void
+    {
+        if (in_array($operation, ['edit', 'view'], true)) {
+            if (blank($record)) {
+                return;
+            }
+
+            if ($component->isVisible() && $permissions !== []) {
+                $component->state(
+                    collect($permissions)
+                        ->filter(fn($value, $key) => $record->checkPermissionTo(str_replace(':', '::', $key)))
+                        ->keys()
+                        ->toArray()
+                );
+            }
+        }
     }
 }

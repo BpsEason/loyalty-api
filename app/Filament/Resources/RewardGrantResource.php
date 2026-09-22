@@ -34,19 +34,9 @@ class RewardGrantResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();
-        $user = auth()->user();
 
-        if ($user && method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
-            return $query->with([
-                'tenant' => fn($q) => $q->withoutGlobalScopes(),
-                'campaign' => fn($q) => $q->withoutGlobalScopes(),
-                'campaignReward' => fn($q) => $q->withoutGlobalScopes(),
-                'customer' => fn($q) => $q->withoutGlobalScopes(),
-                'pointTransaction' => fn($q) => $q->withoutGlobalScopes(),
-            ]);
-        }
-
-        return $query->with([
+        // 完全跟CustomerResource保持一致的写法，使用applyTenantScoping统一处理
+        return static::applyTenantScoping($query, [
             'tenant',
             'campaign',
             'campaignReward',
@@ -242,5 +232,150 @@ class RewardGrantResource extends Resource
     {
         // RewardGrant是系統自動產生的記錄，禁止刪除以保持歷史資料一致性
         return false;
+    }
+
+    public static function infolist(Schema $schema): Schema
+    {
+        return $schema
+            ->schema([
+                \Filament\Schemas\Components\Section::make('獎勵發放結果')
+                    ->schema([
+                        \Filament\Schemas\Components\Grid::make()
+                            ->schema([
+                                \Filament\Infolists\Components\TextEntry::make('status')
+                                    ->label('狀態')
+                                    ->badge()
+                                    ->size('lg')
+                                    ->color(fn(string $state): string => match ($state) {
+                                        RewardGrant::STATUS_PENDING => 'warning',
+                                        RewardGrant::STATUS_GRANTED => 'success',
+                                        RewardGrant::STATUS_FAILED => 'danger',
+                                        default => 'gray',
+                                    })
+                                    ->formatStateUsing(fn(string $state): string => match ($state) {
+                                        RewardGrant::STATUS_PENDING => '待處理',
+                                        RewardGrant::STATUS_GRANTED => '已發放',
+                                        RewardGrant::STATUS_FAILED => '失敗',
+                                        default => $state,
+                                    }),
+                            ]),
+                        \Filament\Schemas\Components\Grid::make(2)
+                            ->schema([
+                                \Filament\Infolists\Components\TextEntry::make('customer.name')
+                                    ->label('客戶')
+                                    ->icon('heroicon-o-user')
+                                    ->size('xl')
+                                    ->weight('bold'),
+                                \Filament\Infolists\Components\TextEntry::make('campaign.name')
+                                    ->label('活動')
+                                    ->icon('heroicon-o-megaphone')
+                                    ->size('xl')
+                                    ->weight('bold'),
+                            ]),
+                        \Filament\Schemas\Components\Grid::make(2)
+                            ->schema([
+                                \Filament\Infolists\Components\TextEntry::make('campaignReward.reward_type')
+                                    ->label('獎勵類型')
+                                    ->icon('heroicon-o-gift')
+                                    ->badge()
+                                    ->color(fn(string|null $state): string => match ($state) {
+                                        'points' => 'info',
+                                        'badge' => 'success',
+                                        'coupon' => 'warning',
+                                        default => 'gray',
+                                    })
+                                    ->formatStateUsing(fn(string|null $state): string => match ($state) {
+                                        'points' => '點數',
+                                        'badge' => '徽章',
+                                        'coupon' => '優惠券',
+                                        default => (string)$state,
+                                    }),
+                                \Filament\Infolists\Components\TextEntry::make('granted_at')
+                                    ->label('發放時間')
+                                    ->icon('heroicon-o-clock')
+                                    ->dateTime(),
+                            ]),
+                    ])
+                    ->collapsible(false),
+
+                \Filament\Schemas\Components\Section::make('發放內容')
+                    ->schema([
+                        \Filament\Schemas\Components\Grid::make(2)
+                            ->schema([
+                                \Filament\Infolists\Components\TextEntry::make('campaignReward.id')
+                                    ->label('獎勵項目')
+                                    ->icon('heroicon-o-tag')
+                                    ->formatStateUsing(fn(int $state): string => "#{$state}"),
+                                \Filament\Infolists\Components\TextEntry::make('pointTransaction.id')
+                                    ->label('點數交易')
+                                    ->icon('heroicon-o-currency-dollar')
+                                    ->copyable()
+                                    ->placeholder('無點數交易記錄')
+                                    ->formatStateUsing(fn(int|null $state): string => $state ? "交易 #{$state}" : ''),
+                            ]),
+                    ])
+                    ->collapsible(false),
+
+                \Filament\Schemas\Components\Section::make('發放結果')
+                    ->schema([
+                        \Filament\Infolists\Components\TextEntry::make('pointTransaction.amount')
+                            ->label('')
+                            ->size('3xl')
+                            ->weight('bold')
+                            ->color('success')
+                            ->alignCenter()
+                            ->placeholder('')
+                            ->formatStateUsing(function ($state, $record) {
+                                if ($record->status !== RewardGrant::STATUS_GRANTED || !$record->pointTransaction) {
+                                    return '';
+                                }
+                                return "+{$state} 點";
+                            }),
+                        \Filament\Infolists\Components\TextEntry::make('pointTransaction.id')
+                            ->label('')
+                            ->size('lg')
+                            ->alignCenter()
+                            ->placeholder('')
+                            ->formatStateUsing(function ($state, $record) {
+                                if ($record->status !== RewardGrant::STATUS_GRANTED || !$record->pointTransaction) {
+                                    return '';
+                                }
+                                return '已建立點數交易';
+                            }),
+                    ])
+                    ->visible(fn($record) => $record->status === RewardGrant::STATUS_GRANTED && $record->pointTransaction)
+                    ->collapsible(false),
+
+                \Filament\Schemas\Components\Section::make('發放失敗資訊')
+                    ->schema([
+                        \Filament\Infolists\Components\TextEntry::make('failure_reason')
+                            ->label('失敗原因')
+                            ->color('danger')
+                            ->size('lg'),
+                    ])
+                    ->visible(fn($record) => $record->status === RewardGrant::STATUS_FAILED)
+                    ->collapsible(false)
+                    ->extraAttributes(['class' => 'border-danger-500']),
+
+                \Filament\Schemas\Components\Section::make('系統資訊')
+                    ->schema([
+                        \Filament\Schemas\Components\Grid::make(3)
+                            ->schema([
+                                \Filament\Infolists\Components\TextEntry::make('tenant.name')
+                                    ->label('租戶')
+                                    ->icon('heroicon-o-building-office')
+                                    ->visible(fn() => auth()->user()->hasRole('super_admin')),
+                                \Filament\Infolists\Components\TextEntry::make('created_at')
+                                    ->label('建立時間')
+                                    ->icon('heroicon-o-calendar')
+                                    ->dateTime(),
+                                \Filament\Infolists\Components\TextEntry::make('updated_at')
+                                    ->label('更新時間')
+                                    ->icon('heroicon-o-arrow-path')
+                                    ->dateTime(),
+                            ]),
+                    ])
+                    ->collapsible(),
+            ]);
     }
 }

@@ -10,6 +10,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\FontWeight;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use UnitEnum;
@@ -39,46 +40,82 @@ class CampaignRewardResource extends Resource
     {
         return $schema
             ->schema([
-                Forms\Components\Select::make('campaign_id')
-                    ->label('活動')
-                    ->relationship('campaign', 'name', function (Builder $query) {
-                        $user = auth()->user();
+                \Filament\Schemas\Components\Section::make('活動資訊')
+                    ->description('第一步：選擇這個獎勵所屬的活動，確定獎勵的歸屬關係')
+                    ->schema([
+                        Forms\Components\Select::make('campaign_id')
+                            ->label('所屬活動')
+                            ->placeholder('請搜尋並選擇一個活動')
+                            ->relationship('campaign', 'name', function (Builder $query) {
+                                $user = auth()->user();
+                                $panel = filament()->getCurrentOrDefaultPanel();
+                                $filamentTenancyScopeName = $panel?->hasTenancy() ? $panel->getTenancyScopeName() : null;
 
-                        if ($user && $user->hasRole('super_admin')) {
-                            return $query->withoutGlobalScope('tenant');
-                        }
+                                // 先移除所有租戶相關的全域範疇，和 HandlesTenantScoping 保持一致
+                                if ($filamentTenancyScopeName) {
+                                    $query->withoutGlobalScope($filamentTenancyScopeName);
+                                }
+                                $query->withoutGlobalScope('tenant');
 
-                        return $query->where('tenant_id', $user?->tenant_id);
-                    })
-                    ->required()
-                    ->searchable(),
-                Forms\Components\Select::make('reward_type')
-                    ->label('獎勵類型')
-                    ->options([
-                        CampaignReward::TYPE_POINTS => '點數',
-                        CampaignReward::TYPE_BADGE => '徽章',
-                        CampaignReward::TYPE_COUPON => '優惠券',
+                                // 如果不是 Super Admin，再套用目前使用者的租戶限制
+                                if (!($user && $user->hasRole('super_admin'))) {
+                                    return $query->where('tenant_id', $user?->tenant_id);
+                                }
+
+                                return $query;
+                            })
+                            ->required()
+                            ->searchable()
+                            ->columnSpanFull()
+                            ->helperText('此獎勵將隸屬於您選擇的活動，只有對應活動啟用時此獎勵才會生效'),
                     ])
-                    ->required(),
-                Forms\Components\TextInput::make('points')
-                    ->label('點數數量')
-                    ->numeric()
-                    ->default(0)
-                    ->required(),
-                Forms\Components\Toggle::make('enabled')
-                    ->label('是否啟用')
-                    ->default(true)
-                    ->required(),
+                    ->collapsible()
+                    ->columnSpanFull(),
+
+                \Filament\Schemas\Components\Section::make('獎勵設定')
+                    ->description('第二步：配置獎勵的具體參數，包括類型、數量和啟用狀態')
+                    ->schema([
+                        Forms\Components\Select::make('reward_type')
+                            ->label('獎勵類型')
+                            ->placeholder('請選擇獎勵類型')
+                            ->options([
+                                CampaignReward::TYPE_POINTS => '點數',
+                                CampaignReward::TYPE_BADGE => '徽章',
+                                CampaignReward::TYPE_COUPON => '優惠券',
+                            ])
+                            ->required()
+                            ->helperText('點數：會員可累積的積分；徽章：成就類榮譽標誌；優惠券：可兌換的折扣券')
+                            ->columnSpan(1),
+                        Forms\Components\TextInput::make('points')
+                            ->label('點數數量')
+                            ->placeholder('輸入點數數量')
+                            ->numeric()
+                            ->default(0)
+                            ->required()
+                            ->helperText('設定獎勵發放的點數數量，所有類型的獎勵皆可設定')
+                            ->columnSpan(1),
+                        Forms\Components\Toggle::make('enabled')
+                            ->label('立即啟用此獎勵')
+                            ->default(true)
+                            ->required()
+                            ->helperText('開啟後，此獎勵將立即生效並可派發給符合條件的會員')
+                            ->columnSpan(1),
+                    ])
+                    ->columns(3)
+                    ->collapsible()
+                    ->columnSpanFull(),
             ]);
     }
 
     public static function table(Table $table): Table
     {
         return $table
+            ->defaultSort('created_at', 'desc')
             ->columns([
                 Tables\Columns\TextColumn::make('campaign.name')
                     ->label('活動')
-                    ->searchable(),
+                    ->searchable()
+                    ->weight(FontWeight::Bold),
                 Tables\Columns\TextColumn::make('reward_type')
                     ->label('獎勵類型')
                     ->badge()
@@ -87,14 +124,26 @@ class CampaignRewardResource extends Resource
                         CampaignReward::TYPE_BADGE => 'warning',
                         CampaignReward::TYPE_COUPON => 'info',
                         default => 'gray',
+                    })
+                    ->formatStateUsing(fn(string $state): string => match ($state) {
+                        CampaignReward::TYPE_POINTS => '點數',
+                        CampaignReward::TYPE_BADGE => '徽章',
+                        CampaignReward::TYPE_COUPON => '優惠券',
+                        default => $state,
                     }),
                 Tables\Columns\TextColumn::make('points')
                     ->label('點數數量')
                     ->numeric()
-                    ->sortable(),
+                    ->sortable()
+                    ->alignRight()
+                    ->weight(FontWeight::Medium),
                 Tables\Columns\IconColumn::make('enabled')
-                    ->label('是否啟用')
-                    ->boolean(),
+                    ->label('狀態')
+                    ->boolean()
+                    ->trueColor('success')
+                    ->falseColor('danger')
+                    ->trueIcon('heroicon-o-check-circle')
+                    ->falseIcon('heroicon-o-x-circle'),
                 Tables\Columns\TextColumn::make('campaign.tenant.name')
                     ->label('租戶')
                     ->searchable()
@@ -106,14 +155,18 @@ class CampaignRewardResource extends Resource
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('reward_type')
-                    ->label('獎勵類型')
+                    ->label('篩選獎勵類型')
+                    ->placeholder('全部類型')
                     ->options([
                         CampaignReward::TYPE_POINTS => '點數',
                         CampaignReward::TYPE_BADGE => '徽章',
                         CampaignReward::TYPE_COUPON => '優惠券',
                     ]),
                 Tables\Filters\TernaryFilter::make('enabled')
-                    ->label('是否啟用'),
+                    ->label('篩選啟用狀態')
+                    ->placeholder('全部狀態')
+                    ->trueLabel('已啟用')
+                    ->falseLabel('已停用'),
             ])
             ->actions([
                 \Filament\Actions\EditAction::make(),

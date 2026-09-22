@@ -202,19 +202,24 @@ class User extends Authenticatable implements JWTSubject, FilamentUser, HasTenan
      */
     public function getDefaultTenant(\Filament\Panel $panel): ?\App\Models\Tenant
     {
-        // 🔑 super_admin（tenant_id為null）若 Session 有紀錄則優先使用上次選擇的租戶
-        if (is_null($this->tenant_id)) {
-            if (session()->has('filament_tenant_id')) {
-                $sessionTenant = Tenant::find(session('filament_tenant_id'));
-                if ($sessionTenant) {
-                    return $sessionTenant;
-                }
-            }
-
-            return $this->getTenants($panel)->first();
+        // 🔑 Super Admin 永遠不預設任何租戶，保持全域存取
+        if ($this->isSuperAdmin()) {
+            return null;
         }
 
-        // 一般使用者使用自己的租戶作為默認
-        return $this->tenant;
+        // 🔑 一般使用者使用自己的租戶作為默認
+        if (!is_null($this->tenant_id)) {
+            return $this->tenant;
+        }
+
+        // 非Super Admin但tenant_id為null的特殊狀況，才從session讀取
+        if (session()->has('filament_tenant_id')) {
+            $sessionTenant = Tenant::find(session('filament_tenant_id'));
+            if ($sessionTenant) {
+                return $sessionTenant;
+            }
+        }
+
+        return $this->getTenants($panel)->first();
     }
 }

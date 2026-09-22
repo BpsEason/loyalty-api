@@ -10,6 +10,9 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Schemas\Schema;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Grid;
+use Filament\Support\Enums\FontWeight;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
@@ -44,26 +47,51 @@ class CustomerResource extends Resource
     public static function form(Schema $schema): Schema
     {
         return $schema
-            ->schema([
-                \App\Forms\Components\TenantSelect::make(),
-                Forms\Components\TextInput::make('name')
-                    ->label('名稱')
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('email')
-                    ->label('電子郵件')
-                    ->email()
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('phone')
-                    ->label('電話')
-                    ->maxLength(20),
-                Forms\Components\KeyValue::make('metadata')
-                    ->label('額外資訊')
-                    ->default([
-                        'member_since' => now()->format('Y-m-d'),
-                        'tier' => 'bronze',
-                    ]),
+            ->components([
+                Section::make('客戶基本資料')
+                    ->description('建立新會員的基本聯絡資訊')
+                    ->schema([
+                        \App\Forms\Components\TenantSelect::make()
+                            ->label('所屬租戶')
+                            ->helperText('請選擇此客戶所屬的會員方案租戶')
+                            ->columnSpanFull(),
+                        Grid::make(2)->schema([
+                            Forms\Components\TextInput::make('name')
+                                ->label('客戶名稱')
+                                ->required()
+                                ->maxLength(255)
+                                ->placeholder('請輸入客戶姓名')
+                                ->helperText('客戶的真實姓名或暱稱'),
+                            Forms\Components\TextInput::make('email')
+                                ->label('電子郵件')
+                                ->email()
+                                ->required()
+                                ->maxLength(255)
+                                ->placeholder('customer@example.com')
+                                ->helperText('用於接收通知與驗證'),
+                        ]),
+                        Forms\Components\TextInput::make('phone')
+                            ->label('聯絡電話')
+                            ->maxLength(20)
+                            ->placeholder('09xx-xxx-xxx')
+                            ->helperText('客戶的手機號碼')
+                            ->columnSpanFull(),
+                    ])
+                    ->columnSpanFull(),
+
+                Section::make('會員資訊')
+                    ->description('管理會員的額外資訊與等級設定')
+                    ->schema([
+                        Forms\Components\KeyValue::make('metadata')
+                            ->label('額外會員資訊')
+                            ->default([
+                                'member_since' => now()->format('Y-m-d'),
+                                'tier' => 'bronze',
+                            ])
+                            ->helperText('可新增額外的會員屬性，如會員加入日期、會員等級等')
+                            ->columnSpanFull(),
+                    ])
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -72,13 +100,19 @@ class CustomerResource extends Resource
         return $table
             ->query(static::getEloquentQuery()->with('pointAccounts.pointTransactions'))
             ->columns([
+                // 客戶 - 主要欄位，包含名稱與 Email
                 Tables\Columns\TextColumn::make('name')
                     ->label('客戶')
                     ->searchable()
-                    ->description(fn(Customer $record): string => $record->email),
+                    ->weight(FontWeight::Bold)
+                    ->icon('heroicon-o-user')
+                    ->description(fn(Customer $record): string => $record->email)
+                    ->wrap(),
 
+                // 會員等級 - Badge 顯示
                 Tables\Columns\TextColumn::make('metadata.tier')
                     ->label('會員等級')
+                    ->alignCenter()
                     ->badge()
                     ->color(fn(string $state): string => match (strtolower($state)) {
                         'platinum' => 'warning',
@@ -93,13 +127,26 @@ class CustomerResource extends Resource
                         'silver' => '白銀會員',
                         'bronze' => '青銅會員',
                         default => $state,
+                    })
+                    ->icon(fn(string $state): string => match (strtolower($state)) {
+                        'platinum' => 'heroicon-o-trophy',
+                        'gold' => 'heroicon-o-star',
+                        'silver' => 'heroicon-o-academic-cap',
+                        'bronze' => 'heroicon-o-user',
+                        default => 'heroicon-o-user',
                     }),
 
+                // 目前點數 - 強調顯示
                 Tables\Columns\TextColumn::make('total_points')
                     ->label('目前點數')
                     ->getStateUsing(fn(Customer $record) => number_format($record->pointAccounts?->balance ?? 0))
-                    ->sortable(),
+                    ->sortable()
+                    ->alignRight()
+                    ->weight(FontWeight::Bold)
+                    ->color('primary')
+                    ->icon('heroicon-o-currency-dollar'),
 
+                // 最後活動
                 Tables\Columns\TextColumn::make('last_activity')
                     ->label('最後活動')
                     ->getStateUsing(function (Customer $record) {
@@ -108,26 +155,48 @@ class CustomerResource extends Resource
                         }
                         $lastTransaction = $record->pointAccounts->pointTransactions()->latest('created_at')->first();
                         return $lastTransaction?->created_at?->diffForHumans() ?? '無活動記錄';
-                    }),
+                    })
+                    ->color('gray')
+                    ->icon('heroicon-o-clock')
+                    ->alignCenter(),
 
+                // 所屬租戶 - 僅 Super Admin 可見
                 Tables\Columns\TextColumn::make('tenant.name')
                     ->label('所屬租戶')
                     ->searchable()
                     ->visible(fn() => auth()->user()->hasRole('super_admin'))
                     ->badge()
-                    ->color('gray'),
+                    ->color('gray')
+                    ->icon('heroicon-o-building-office'),
 
+                // 加入時間
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('加入時間')
                     ->dateTime('Y-m-d')
-                    ->sortable(),
+                    ->sortable()
+                    ->color('gray')
+                    ->icon('heroicon-o-calendar')
+                    ->alignRight(),
             ])
+            ->defaultSort('created_at', 'desc')
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('tier')
+                    ->label('會員等級')
+                    ->options([
+                        'platinum' => '白金會員',
+                        'gold' => '黃金會員',
+                        'silver' => '白銀會員',
+                        'bronze' => '青銅會員',
+                    ])
+                    ->query(function (Builder $query, $data) {
+                        if (filled($data['value'])) {
+                            $query->whereRaw('JSON_UNQUOTE(JSON_EXTRACT(metadata, "$.tier")) = ?', [$data['value']]);
+                        }
+                    }),
             ])
             ->actions([
-                \Filament\Actions\EditAction::make(),
-                \Filament\Actions\DeleteAction::make(),
+                \Filament\Actions\EditAction::make()->icon('heroicon-o-pencil'),
+                \Filament\Actions\DeleteAction::make()->icon('heroicon-o-trash'),
             ])
             ->bulkActions([
                 \Filament\Actions\BulkActionGroup::make([
