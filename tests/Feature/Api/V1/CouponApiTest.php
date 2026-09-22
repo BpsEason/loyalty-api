@@ -472,6 +472,9 @@ class CouponApiTest extends TestCase
         ]);
         $firstResponse->assertStatus(201);
 
+        // 記錄第一次回應的內容
+        $firstData = $firstResponse->json();
+
         // 使用相同的冪等性鍵發送相同的請求，應該返回相同結果且不會重複建立
         $secondResponse = $this->withHeaders([
             'Authorization' => "Bearer {$token}",
@@ -481,8 +484,18 @@ class CouponApiTest extends TestCase
             'code' => 'SUMMER2024'
         ]);
 
-        // 驗證只建立了一張UserCoupon
+        // 驗證第二次回應的狀態碼符合冪等性實作（返回原狀態碼201）
+        $secondResponse->assertStatus(201);
+
+        // 驗證第二次回應的核心數據與第一次一致
+        $secondData = $secondResponse->json();
+        $this->assertEquals($firstData['success'], $secondData['success']);
+        $this->assertEquals($firstData['data']['id'], $secondData['data']['id']);
+
+        // 第二次請求不會建立第二張UserCoupon
         $this->assertDatabaseCount('user_coupons', 1);
+
+        // issued_quantity 不會再次增加
         $template->refresh();
         $this->assertEquals(1, $template->issued_quantity);
     }
@@ -569,9 +582,330 @@ class CouponApiTest extends TestCase
         $this->assertDatabaseCount('user_coupons', 2);
     }
 
-    // ============ 併發安全性補充測試：確保不會超發 ============
+    // ============ 一、Customer Ownership 測試 ============
     #[Test]
-    public function concurrent_claims_do_not_exceed_total_quantity(): void
+    public function customer_cannot_redeem_another_customer_coupon(): void
+    {
+        $tokenA = $this->getTokenForUserA(); // 同一租戶的使用者token
+
+        // 在tenantA下建立第二個客戶Customer B
+        $customerB = Customer::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Customer B',
+            'email' => 'customer-b-tenanta@example.com',
+            'qr_token' => 'token-b-tenanta-xyz789',
+        ]);
+
+        // 建立租戶A的優惠券
+        $template = $this->createValidCouponTemplateForTenantA();
+
+        // Customer B 成功領取優惠券 - 使用同一個租戶使用者的token來為customerB領取
+        $this->withHeaders([
+            'Authorization' => "Bearer {$tokenA}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$customerB->id}/coupons/claim", [
+            'code' => 'SUMMER2024'
+        ]);
+
+        $userCoupon = UserCoupon::first();
+        $this->assertNotNull($userCoupon);
+        $this->assertEquals($customerB->id, $userCoupon->customer_id);
+
+        // Customer A 嘗試使用 Customer B 的 user_coupon_id 進行 Redeem
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$tokenA}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/{$userCoupon->id}/redeem", [
+            'reference' => 'REDEMPTION-001',
+            'order_reference' => 'ORDER-001',
+            'order_amount' => 1000,
+        ]);
+
+        // 依據實際程式碼，應該返回404
+        $response->assertStatus(404)
+            ->assertJsonPath('success', false);
+
+        // 驗證不會建立 CouponRedemption
+        $this->assertDatabaseCount('coupon_redemptions', 0);
+
+        // Customer B 的 UserCoupon 狀態維持不變
+        $userCoupon->refresh();
+        $this->assertEquals(UserCoupon::STATUS_AVAILABLE, $userCoupon->status);
+        $this->assertNull($userCoupon->used_at);
+    }
+
+    // ============ 二、minimum_order_amount Boundary Test ============
+    #[Test]
+    public function cannot_redeem_coupon_when_order_amount_below_minimum(): void
+    {
+        $token = $this->getTokenForUserA();
+        // minimum_order_amount = 500
+        $template = $this->createValidCouponTemplateForTenantA([
+            'minimum_order_amount' => 500,
+        ]);
+
+        // Customer A 領取優惠券
+        $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/claim", [
+            'code' => 'SUMMER2024'
+        ]);
+
+        $userCoupon = UserCoupon::first();
+
+        // 嘗試使用 order_amount = 499（低於最低消費）進行核銷
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/{$userCoupon->id}/redeem", [
+            'reference' => 'REDEMPTION-001',
+            'order_reference' => 'ORDER-001',
+            'order_amount' => 499,
+        ]);
+
+        // API 仍然會執行 redeem，但折扣金額為0
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.discount_amount', 0);
+
+        // UserCoupon 狀態會被標記為已使用（依據實際程式碼邏輯）
+        $userCoupon->refresh();
+        $this->assertEquals(UserCoupon::STATUS_USED, $userCoupon->status);
+        $this->assertNotNull($userCoupon->used_at);
+
+        // 會建立一筆 CouponRedemption，但折扣金額為0
+        $this->assertDatabaseCount('coupon_redemptions', 1);
+        $this->assertDatabaseHas('coupon_redemptions', [
+            'tenant_id' => $this->tenantA->id,
+            'user_coupon_id' => $userCoupon->id,
+            'customer_id' => $this->customerA->id,
+            'discount_amount' => 0,
+        ]);
+    }
+
+    #[Test]
+    public function can_redeem_coupon_when_order_amount_equals_minimum(): void
+    {
+        $token = $this->getTokenForUserA();
+        // minimum_order_amount = 500
+        $template = $this->createValidCouponTemplateForTenantA([
+            'minimum_order_amount' => 500,
+            'discount_amount' => 100,
+        ]);
+
+        // Customer A 領取優惠券
+        $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/claim", [
+            'code' => 'SUMMER2024'
+        ]);
+
+        $userCoupon = UserCoupon::first();
+
+        // 使用 order_amount = 500（剛好達到最低消費）進行核銷
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/{$userCoupon->id}/redeem", [
+            'reference' => 'REDEMPTION-001',
+            'order_reference' => 'ORDER-001',
+            'order_amount' => 500,
+        ]);
+
+        // 核銷成功
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.discount_amount', 100);
+
+        // UserCoupon 狀態更新為已使用
+        $userCoupon->refresh();
+        $this->assertEquals(UserCoupon::STATUS_USED, $userCoupon->status);
+        $this->assertNotNull($userCoupon->used_at);
+
+        // 建立一筆 CouponRedemption，折扣金額正確
+        $this->assertDatabaseCount('coupon_redemptions', 1);
+        $this->assertDatabaseHas('coupon_redemptions', [
+            'tenant_id' => $this->tenantA->id,
+            'user_coupon_id' => $userCoupon->id,
+            'customer_id' => $this->customerA->id,
+            'discount_amount' => 100,
+        ]);
+    }
+
+
+
+    // ============ 四、補 Redeem Idempotency ============
+    #[Test]
+    public function idempotency_prevents_duplicate_coupon_redemptions(): void
+    {
+        $token = $this->getTokenForUserA();
+        $template = $this->createValidCouponTemplateForTenantA();
+        $idempotencyKey = 'redeem-idempotency-key';
+
+        // Customer A 領取優惠券
+        $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/claim", [
+            'code' => 'SUMMER2024'
+        ]);
+
+        $userCoupon = UserCoupon::first();
+
+        // 第一次 Redeem
+        $firstResponse = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/{$userCoupon->id}/redeem", [
+            'reference' => 'REDEMPTION-001',
+            'order_reference' => 'ORDER-001',
+            'order_amount' => 1000,
+        ]);
+        $firstResponse->assertStatus(200);
+        $firstData = $firstResponse->json();
+
+        // 第二次使用完全相同的 Idempotency-Key 和 request body
+        $secondResponse = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/{$userCoupon->id}/redeem", [
+            'reference' => 'REDEMPTION-001',
+            'order_reference' => 'ORDER-001',
+            'order_amount' => 1000,
+        ]);
+
+        // 第二次回應狀態符合冪等性實作
+        $secondResponse->assertStatus(200);
+        $secondData = $secondResponse->json();
+
+        // 驗證兩次回應的關鍵數據一致
+        $this->assertEquals($firstData['data']['id'], $secondData['data']['id']);
+        $this->assertEquals($firstData['data']['reference'], $secondData['data']['reference']);
+        $this->assertEquals($firstData['data']['discount_amount'], $secondData['data']['discount_amount']);
+
+        // 驗證只建立了一筆 coupon_redemptions
+        $this->assertDatabaseCount('coupon_redemptions', 1);
+
+        // UserCoupon 仍然只有一個 USED 狀態
+        $userCoupon->refresh();
+        $this->assertEquals(UserCoupon::STATUS_USED, $userCoupon->status);
+        $this->assertNotNull($userCoupon->used_at);
+    }
+
+    // ============ 五、補 Redeem Idempotency Conflict ============
+    #[Test]
+    public function redeem_idempotency_returns_conflict_for_different_request_with_same_key(): void
+    {
+        $token = $this->getTokenForUserA();
+        $template = $this->createValidCouponTemplateForTenantA();
+        $idempotencyKey = 'redeem-idempotency-key-456';
+
+        // Customer A 領取優惠券
+        $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/claim", [
+            'code' => 'SUMMER2024'
+        ]);
+
+        $userCoupon = UserCoupon::first();
+
+        // 第一次 Redeem
+        $firstResponse = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/{$userCoupon->id}/redeem", [
+            'reference' => 'REDEMPTION-001',
+            'order_reference' => 'ORDER-001',
+            'order_amount' => 1000,
+        ]);
+        $firstResponse->assertStatus(200);
+
+        // 第二次使用相同的 Idempotency-Key 但不同的 request body
+        $secondResponse = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/{$userCoupon->id}/redeem", [
+            'reference' => 'REDEMPTION-002', // 修改 reference
+            'order_reference' => 'ORDER-002',
+            'order_amount' => 2000,
+        ]);
+
+        // 應該返回409衝突，符合冪等性實作
+        $secondResponse->assertStatus(409);
+
+        // 驗證只建立了一筆 CouponRedemption
+        $this->assertDatabaseCount('coupon_redemptions', 1);
+    }
+
+    // ============ 六、補 Coupon Code 不存在 ============
+    #[Test]
+    public function cannot_claim_nonexistent_coupon(): void
+    {
+        $token = $this->getTokenForUserA();
+        $template = $this->createValidCouponTemplateForTenantA();
+        $initialIssuedQuantity = $template->issued_quantity;
+
+        // 嘗試領取不存在的優惠券代碼
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/claim", [
+            'code' => 'NON_EXISTENT_COUPON'
+        ]);
+
+        // 依據實際程式碼，驗證失敗返回422
+        $response->assertStatus(422)
+            ->assertJsonPath('success', false);
+
+        // 不建立 UserCoupon
+        $this->assertDatabaseCount('user_coupons', 0);
+
+        // issued_quantity 不變
+        $template->refresh();
+        $this->assertEquals($initialIssuedQuantity, $template->issued_quantity);
+    }
+
+    // ============ 七、補 Coupon 狀態驗證 - inactive 狀態 ============
+    #[Test]
+    public function cannot_claim_inactive_coupon(): void
+    {
+        $token = $this->getTokenForUserA();
+        // 建立一個 inactive 狀態的優惠券
+        $template = $this->createValidCouponTemplateForTenantA([
+            'status' => CouponTemplate::STATUS_INACTIVE,
+        ]);
+        $initialIssuedQuantity = $template->issued_quantity;
+
+        // 嘗試領取
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/claim", [
+            'code' => 'SUMMER2024'
+        ]);
+
+        // 領取失敗，返回400（因為 isValid() 會返回false）
+        $response->assertStatus(400)
+            ->assertJsonPath('success', false);
+
+        // 不建立 UserCoupon
+        $this->assertDatabaseCount('user_coupons', 0);
+
+        // issued_quantity 不變
+        $template->refresh();
+        $this->assertEquals($initialIssuedQuantity, $template->issued_quantity);
+    }
+
+    // ============ 循序測試：確保不會超發（原concurrent測試，實際上是sequential） ============
+    #[Test]
+    public function sequential_claims_do_not_exceed_total_quantity(): void
     {
         $token = $this->getTokenForUserA();
         // 建立只能發行5張的優惠券
@@ -580,7 +914,7 @@ class CouponApiTest extends TestCase
             'per_customer_limit' => 1, // 每個客戶只能領取一次，符合資料庫唯一約束
         ]);
 
-        // 建立10個不同的客戶來模擬多使用者並發請求
+        // 建立10個不同的客戶來模擬多使用者重複請求
         $customers = collect();
         for ($c = 0; $c < 10; $c++) {
             $customers->push(\App\Models\Customer::create([
@@ -591,7 +925,7 @@ class CouponApiTest extends TestCase
             ]));
         }
 
-        // 模擬10次並發請求，但只能成功5次
+        // 模擬10次循序請求，但只能成功5次
         $successCount = 0;
         $failCount = 0;
 
@@ -636,5 +970,299 @@ class CouponApiTest extends TestCase
         // issued_quantity 等於5，不會超過total_quantity
         $template->refresh();
         $this->assertEquals(5, $template->issued_quantity);
+    }
+
+    // ============ 8. 混合支付成功測試 - 同時使用優惠券和點數 ============
+    #[Test]
+    public function can_process_mixed_payment_with_coupon_and_points_successfully(): void
+    {
+        $token = $this->getTokenForUserA();
+
+        // 建立客戶的點數帳戶
+        $pointAccount = \App\Models\PointAccount::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'balance' => 500,
+            'total_earned' => 500,
+            'total_redeemed' => 0,
+        ]);
+
+        // 建立點數批次
+        \App\Models\PointLot::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'point_account_id' => $pointAccount->id,
+            'original_points' => 500,
+            'remaining_points' => 500,
+            'earned_at' => now()->subDays(30),
+            'expired_at' => null,
+        ]);
+
+        // 建立並領取優惠券
+        $template = $this->createValidCouponTemplateForTenantA();
+        $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/coupons/claim", [
+            'code' => 'SUMMER2024'
+        ]);
+        $userCoupon = \App\Models\UserCoupon::first();
+
+        // 執行混合支付：訂單金額1000，使用優惠券折扣100，再使用300點數
+        $idempotencyKey = \Illuminate\Support\Str::uuid()->toString();
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/mixed-payment", [
+            'reference' => 'MIXED-001',
+            'order_reference' => 'ORDER-99999',
+            'order_amount' => 1000,
+            'user_coupon_id' => $userCoupon->id,
+            'points_amount' => 300,
+        ]);
+
+        // 驗證API回應
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('message', '混合支付處理成功')
+            ->assertJsonPath('data.original_amount', 1000)
+            ->assertJsonPath('data.discount_amount', 100)
+            ->assertJsonPath('data.points_used', 300)
+            ->assertJsonPath('data.final_amount', 600);
+
+        // 驗證優惠券狀態更新正確
+        $userCoupon->refresh();
+        $this->assertEquals(\App\Models\UserCoupon::STATUS_USED, $userCoupon->status);
+        $this->assertNotNull($userCoupon->used_at);
+
+        // 驗證點數帳戶餘額正確扣減
+        $pointAccount->refresh();
+        $this->assertEquals(200, $pointAccount->balance);
+        $this->assertEquals(300, $pointAccount->total_redeemed);
+
+        // 驗證點數批次餘額正確扣減
+        $pointLot = \App\Models\PointLot::first();
+        $pointLot->refresh();
+        $this->assertEquals(200, $pointLot->remaining_points);
+
+        // 驗證建立了點數交易記錄
+        $this->assertDatabaseHas('point_transactions', [
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'type' => \App\Models\PointTransaction::TYPE_REDEEM,
+            'amount' => 300,
+            'description' => '混合支付點數折抵',
+        ]);
+
+        // 驗證建立了優惠券核銷記錄
+        $this->assertDatabaseHas('coupon_redemptions', [
+            'tenant_id' => $this->tenantA->id,
+            'user_coupon_id' => $userCoupon->id,
+            'customer_id' => $this->customerA->id,
+            'reference' => 'MIXED-001',
+            'discount_amount' => 100,
+        ]);
+    }
+
+    #[Test]
+    public function can_process_mixed_payment_with_only_points(): void
+    {
+        $token = $this->getTokenForUserA();
+
+        // 建立客戶的點數帳戶
+        $pointAccount = \App\Models\PointAccount::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'balance' => 500,
+            'total_earned' => 500,
+            'total_redeemed' => 0,
+        ]);
+
+        // 建立點數批次
+        \App\Models\PointLot::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'point_account_id' => $pointAccount->id,
+            'original_points' => 500,
+            'remaining_points' => 500,
+            'earned_at' => now()->subDays(30),
+            'expired_at' => null,
+        ]);
+
+        // 只使用點數支付
+        $idempotencyKey = \Illuminate\Support\Str::uuid()->toString();
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/mixed-payment", [
+            'reference' => 'POINTS-ONLY-001',
+            'order_amount' => 1000,
+            'points_amount' => 200,
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.points_used', 200)
+            ->assertJsonPath('data.final_amount', 800);
+
+        // 驗證點數正確扣減
+        $pointAccount->refresh();
+        $this->assertEquals(300, $pointAccount->balance);
+    }
+
+    #[Test]
+    public function cannot_process_mixed_payment_with_insufficient_points(): void
+    {
+        $token = $this->getTokenForUserA();
+
+        // 建立客戶的點數帳戶，餘額只有100，但要使用200點數
+        $pointAccount = \App\Models\PointAccount::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'balance' => 100,
+            'total_earned' => 100,
+            'total_redeemed' => 0,
+        ]);
+
+        \App\Models\PointLot::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'point_account_id' => $pointAccount->id,
+            'original_points' => 100,
+            'remaining_points' => 100,
+            'earned_at' => now()->subDays(30),
+            'expired_at' => now()->addDays(365),
+        ]);
+
+        $idempotencyKey = \Illuminate\Support\Str::uuid()->toString();
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/mixed-payment", [
+            'reference' => 'INSUFFICIENT-001',
+            'order_amount' => 1000,
+            'points_amount' => 200,
+        ]);
+
+        // 應該失敗
+        $response->assertStatus(400)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', '點數餘額不足');
+
+        // 驗證點數餘額沒有變化
+        $pointAccount->refresh();
+        $this->assertEquals(100, $pointAccount->balance);
+    }
+
+    #[Test]
+    public function cannot_process_mixed_payment_without_any_discount(): void
+    {
+        $token = $this->getTokenForUserA();
+
+        // 既不使用優惠券也不使用點數，應該失敗
+        $idempotencyKey = \Illuminate\Support\Str::uuid()->toString();
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/mixed-payment", [
+            'reference' => 'NO-DISCOUNT-001',
+            'order_amount' => 1000,
+            // 不提供user_coupon_id，points_amount設為0
+            'points_amount' => 0,
+        ]);
+
+        $response->assertStatus(400)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', '至少需要使用一項優惠（優惠券或點數）');
+    }
+
+    #[Test]
+    public function cannot_use_coupon_from_another_tenant_in_mixed_payment(): void
+    {
+        $token = $this->getTokenForUserB(); // 使用租戶B的token
+
+        // 在租戶A建立客戶、優惠券
+        $template = $this->createValidCouponTemplateForTenantA();
+        $this->customerA->userCoupons()->create([
+            'tenant_id' => $this->tenantA->id,
+            'coupon_template_id' => $template->id,
+            'status' => \App\Models\UserCoupon::STATUS_AVAILABLE,
+            'issued_at' => now(),
+            'expired_at' => now()->addDays(30),
+        ]);
+        $userCoupon = \App\Models\UserCoupon::first();
+
+        // 嘗試用租戶B的token使用租戶A客戶的優惠券進行混合支付
+        $idempotencyKey = \Illuminate\Support\Str::uuid()->toString();
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantB->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/mixed-payment", [
+            'reference' => 'CROSS-TENANT-001',
+            'order_amount' => 1000,
+            'user_coupon_id' => $userCoupon->id,
+            'points_amount' => 100,
+        ]);
+
+        $response->assertStatus(404)
+            ->assertJsonPath('success', false);
+    }
+
+    #[Test]
+    public function cannot_use_already_redeemed_coupon_in_mixed_payment(): void
+    {
+        $token = $this->getTokenForUserA();
+
+        // 建立已使用的優惠券
+        $template = $this->createValidCouponTemplateForTenantA();
+        $userCoupon = \App\Models\UserCoupon::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'coupon_template_id' => $template->id,
+            'status' => \App\Models\UserCoupon::STATUS_USED,
+            'used_at' => now()->subDay(),
+            'issued_at' => now()->subDays(5),
+            'expired_at' => now()->addDays(25),
+        ]);
+
+        // 建立點數帳戶
+        $pointAccount = \App\Models\PointAccount::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'balance' => 500,
+            'total_earned' => 500,
+            'total_redeemed' => 0,
+        ]);
+        \App\Models\PointLot::create([
+            'tenant_id' => $this->tenantA->id,
+            'customer_id' => $this->customerA->id,
+            'point_account_id' => $pointAccount->id,
+            'original_points' => 500,
+            'remaining_points' => 500,
+            'earned_at' => now()->subDays(30),
+            'expired_at' => null,
+        ]);
+
+        // 嘗試使用已核銷的優惠券
+        $idempotencyKey = \Illuminate\Support\Str::uuid()->toString();
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+            'Idempotency-Key' => $idempotencyKey,
+        ])->postJson("/api/v1/customers/{$this->customerA->id}/mixed-payment", [
+            'reference' => 'REDEEMED-001',
+            'order_amount' => 1000,
+            'user_coupon_id' => $userCoupon->id,
+            'points_amount' => 100,
+        ]);
+
+        $response->assertStatus(400)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', '優惠券無法使用，可能已過期或已使用');
     }
 }

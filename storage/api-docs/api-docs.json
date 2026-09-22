@@ -414,6 +414,86 @@
                 ]
             }
         },
+        "/customers/{customer}/coupon-redemptions": {
+            "get": {
+                "tags": [
+                    "Coupons"
+                ],
+                "summary": "Get list of coupon redemptions for a customer",
+                "operationId": "118f47ae7a8b36aab5c7edb3e8d188e8",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 15,
+                            "maximum": 100
+                        }
+                    },
+                    {
+                        "name": "start_date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "end_date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Coupon redemptions retrieved successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Coupon redemptions retrieved successfully"
+                                        },
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/CouponRedemption"
+                                            }
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
         "/customers/{customer}/coupons": {
             "get": {
                 "tags": [
@@ -625,6 +705,136 @@
                     },
                     "404": {
                         "description": "Coupon not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/customers/{customer}/mixed-payment": {
+            "post": {
+                "tags": [
+                    "Coupons"
+                ],
+                "summary": "混合支付：同時使用優惠券和點數",
+                "operationId": "b34cea0bffe3834cab07721877647bf3",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "X-Tenant-ID",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "reference",
+                                    "order_amount"
+                                ],
+                                "properties": {
+                                    "reference": {
+                                        "type": "string",
+                                        "example": "PAYMENT-12345"
+                                    },
+                                    "order_reference": {
+                                        "type": "string",
+                                        "example": "ORDER-67890",
+                                        "nullable": true
+                                    },
+                                    "order_amount": {
+                                        "type": "integer",
+                                        "example": 1000,
+                                        "minimum": 0
+                                    },
+                                    "user_coupon_id": {
+                                        "type": "integer",
+                                        "example": 1,
+                                        "nullable": true
+                                    },
+                                    "points_amount": {
+                                        "type": "integer",
+                                        "example": 300,
+                                        "nullable": true,
+                                        "minimum": 0
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "混合支付處理成功",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "混合支付處理成功"
+                                        },
+                                        "data": {
+                                            "properties": {
+                                                "original_amount": {
+                                                    "type": "integer",
+                                                    "example": 1000
+                                                },
+                                                "discount_amount": {
+                                                    "type": "integer",
+                                                    "example": 100
+                                                },
+                                                "points_used": {
+                                                    "type": "integer",
+                                                    "example": 300
+                                                },
+                                                "final_amount": {
+                                                    "type": "integer",
+                                                    "example": 600
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "混合支付處理失敗"
+                    },
+                    "404": {
+                        "description": "客戶或資源未找到"
                     }
                 },
                 "security": [
@@ -1188,6 +1398,87 @@
                         "schema": {
                             "type": "integer"
                         }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 15,
+                            "maximum": 100
+                        }
+                    },
+                    {
+                        "name": "type",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Filter by transaction type",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "start_date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Filter transactions created on or after this date (Y-m-d)",
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "end_date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Filter transactions created on or before this date (Y-m-d)",
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "min_amount",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Filter transactions with amount greater than or equal to this value",
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "max_amount",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Filter transactions with amount less than or equal to this value",
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "sort_by",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Field to sort by",
+                            "type": "string",
+                            "default": "created_at"
+                        }
+                    },
+                    {
+                        "name": "sort_order",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Sort order (asc/desc)",
+                            "type": "string",
+                            "default": "desc",
+                            "enum": [
+                                "asc",
+                                "desc"
+                            ]
+                        }
                     }
                 ],
                 "responses": {
@@ -1570,6 +1861,252 @@
                     }
                 ]
             }
+        },
+        "/customers/{customer}/point-transactions/expiring": {
+            "get": {
+                "tags": [
+                    "Point Transactions"
+                ],
+                "summary": "Get expiring point lots for a customer",
+                "operationId": "d514b5d80c99b4e5f5b5ed9b4e34cbf2",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "days",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 30
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 15,
+                            "maximum": 100
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Expiring point lots retrieved successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Expiring point lots retrieved successfully"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/customers/{customer}/reward-grants": {
+            "get": {
+                "tags": [
+                    "Rewards"
+                ],
+                "summary": "Get reward grant history for a customer",
+                "operationId": "eb5de4842575d1a54b95e1f7afbc15f7",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 15,
+                            "maximum": 100
+                        }
+                    },
+                    {
+                        "name": "X-Tenant-ID",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Reward grants retrieved successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Reward grants retrieved successfully"
+                                        },
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/RewardGrant"
+                                            }
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Customer not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/customers/{customer}/rewards/grant": {
+            "post": {
+                "tags": [
+                    "Rewards"
+                ],
+                "summary": "Grant a reward to a customer",
+                "operationId": "b6e071ff51daee2c545b0b05c4d31889",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "X-Tenant-ID",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "campaign_reward_id"
+                                ],
+                                "properties": {
+                                    "campaign_reward_id": {
+                                        "description": "The ID of the campaign reward to grant",
+                                        "type": "integer",
+                                        "example": 1
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Reward granted successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Reward granted successfully"
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/RewardGrant"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Failed to grant reward",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": false
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Failed to grant reward"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Customer or campaign reward not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
         }
     },
     "components": {
@@ -1895,6 +2432,49 @@
                     }
                 },
                 "type": "object"
+            },
+            "RewardGrant": {
+                "title": "RewardGrant",
+                "description": "Reward grant model",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "status": {
+                        "type": "string",
+                        "example": "granted",
+                        "enum": [
+                            "pending",
+                            "granted",
+                            "failed"
+                        ]
+                    },
+                    "campaign_id": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "campaign_reward_id": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "failure_reason": {
+                        "type": "string",
+                        "example": null,
+                        "nullable": true
+                    },
+                    "granted_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "example": "2026-09-15T12:00:00Z"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "example": "2026-09-15T12:00:00Z"
+                    }
+                },
+                "type": "object"
             }
         },
         "securitySchemes": {
@@ -1925,6 +2505,10 @@
         {
             "name": "Point Transactions",
             "description": "Point Transactions"
+        },
+        {
+            "name": "Rewards",
+            "description": "Rewards"
         }
     ]
 }

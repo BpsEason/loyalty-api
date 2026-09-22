@@ -122,6 +122,14 @@ class Customer extends Model
     }
 
     /**
+     * 客戶的所有點數批次
+     */
+    public function pointLots(): HasMany
+    {
+        return $this->hasMany(\App\Models\PointLot::class);
+    }
+
+    /**
      * 客戶的所有優惠券
      */
     public function userCoupons(): HasMany

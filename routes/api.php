@@ -25,6 +25,8 @@ Route::prefix('v1')->group(function () {
 
             // Point Transaction API routes
             Route::get('customers/{customer}/point-transactions', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'index']);
+            // 點數即將過期查詢API - 必須放在{pointTransaction}動態路由之前
+            Route::get('customers/{customer}/point-transactions/expiring', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'expiring']);
             Route::get('customers/{customer}/point-transactions/{pointTransaction}', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'show']);
             Route::post('customers/{customer}/point-transactions', [\App\Http\Controllers\Api\V1\PointTransactionController::class, 'store'])->middleware('idempotent');
 
@@ -40,6 +42,15 @@ Route::prefix('v1')->group(function () {
             Route::get('customers/{customer}/coupons/{userCoupon}', [\App\Http\Controllers\Api\V1\CouponController::class, 'show']);
             Route::post('customers/{customer}/coupons/claim', [\App\Http\Controllers\Api\V1\CouponController::class, 'claim'])->middleware('idempotent');
             Route::post('customers/{customer}/coupons/{userCoupon}/redeem', [\App\Http\Controllers\Api\V1\CouponController::class, 'redeem'])->middleware('idempotent');
+            // 混合支付API
+            Route::post('customers/{customer}/mixed-payment', [\App\Http\Controllers\Api\V1\CouponController::class, 'mixedPayment'])->middleware('idempotent');
+
+            // 優惠券核銷歷史查詢
+            Route::get('customers/{customer}/coupon-redemptions', [\App\Http\Controllers\Api\V1\CouponController::class, 'redemptionHistory']);
+
+            // 獎勵相關API
+            Route::get('customers/{customer}/reward-grants', [\App\Http\Controllers\Api\V1\RewardController::class, 'index']);
+            Route::post('customers/{customer}/rewards/grant', [\App\Http\Controllers\Api\V1\RewardController::class, 'grant'])->middleware('idempotent');
         });
     });
 });

@@ -30,6 +30,14 @@ class PointTransactionController extends Controller
         security: [['bearerAuth' => []]],
         parameters: [
             new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+            new OA\Parameter(name: 'per_page', in: 'query', required: false, schema: new OA\Schema(type: 'integer', default: 15, maximum: 100)),
+            new OA\Parameter(name: 'type', in: 'query', required: false, schema: new OA\Schema(type: 'string', description: 'Filter by transaction type')),
+            new OA\Parameter(name: 'start_date', in: 'query', required: false, schema: new OA\Schema(type: 'string', format: 'date', description: 'Filter transactions created on or after this date (Y-m-d)')),
+            new OA\Parameter(name: 'end_date', in: 'query', required: false, schema: new OA\Schema(type: 'string', format: 'date', description: 'Filter transactions created on or before this date (Y-m-d)')),
+            new OA\Parameter(name: 'min_amount', in: 'query', required: false, schema: new OA\Schema(type: 'integer', description: 'Filter transactions with amount greater than or equal to this value')),
+            new OA\Parameter(name: 'max_amount', in: 'query', required: false, schema: new OA\Schema(type: 'integer', description: 'Filter transactions with amount less than or equal to this value')),
+            new OA\Parameter(name: 'sort_by', in: 'query', required: false, schema: new OA\Schema(type: 'string', default: 'created_at', description: 'Field to sort by')),
+            new OA\Parameter(name: 'sort_order', in: 'query', required: false, schema: new OA\Schema(type: 'string', default: 'desc', enum: ['asc', 'desc'], description: 'Sort order (asc/desc)')),
         ],
         responses: [
             new OA\Response(
@@ -58,8 +66,36 @@ class PointTransactionController extends Controller
             return ApiResponse::error('Customer not found', null, [], 404);
         }
 
-        $perPage = min($request->input('per_page', 15), 100);
-        $transactions = $customer->pointTransactions()->latest()->paginate($perPage);
+        $perPage = min((int) $request->input('per_page', 15), 100);
+        $query = $customer->pointTransactions();
+
+        // 按交易類型過濾
+        if ($request->has('type')) {
+            $query->where('type', $request->input('type'));
+        }
+
+        // 按日期範圍過濾
+        if ($request->has('start_date')) {
+            $query->whereDate('created_at', '>=', $request->input('start_date'));
+        }
+        if ($request->has('end_date')) {
+            $query->whereDate('created_at', '<=', $request->input('end_date'));
+        }
+
+        // 按金額範圍過濾
+        if ($request->has('min_amount')) {
+            $query->where('amount', '>=', (int) $request->input('min_amount'));
+        }
+        if ($request->has('max_amount')) {
+            $query->where('amount', '<=', (int) $request->input('max_amount'));
+        }
+
+        // 按排序
+        $sortBy = $request->input('sort_by', 'created_at');
+        $sortOrder = $request->input('sort_order', 'desc');
+        $query->orderBy($sortBy, $sortOrder);
+
+        $transactions = $query->paginate($perPage);
 
         return ApiResponse::success(
             data: PointTransactionResource::collection($transactions),
@@ -295,5 +331,56 @@ class PointTransactionController extends Controller
                 status: 422
             );
         }
+    }
+
+    #[OA\Get(
+        path: '/customers/{customer}/point-transactions/expiring',
+        summary: 'Get expiring point lots for a customer',
+        tags: ['Point Transactions'],
+        security: [['bearerAuth' => []]],
+        parameters: [
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+            new OA\Parameter(name: 'days', in: 'query', required: false, schema: new OA\Schema(type: 'integer', default: 30)),
+            new OA\Parameter(name: 'per_page', in: 'query', required: false, schema: new OA\Schema(type: 'integer', default: 15, maximum: 100)),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Expiring point lots retrieved successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Expiring point lots retrieved successfully'),
+                    ]
+                )
+            ),
+        ]
+    )]
+    public function expiring(Request $request, Customer $customer, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
+    {
+        // 確保客戶屬於當前租戶
+        $tenant = $tenantContext->getTenant();
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
+        $days = (int) $request->input('days', 30);
+        $perPage = min((int) $request->input('per_page', 15), 100);
+
+        $expiringThreshold = now()->addDays($days);
+
+        // 查詢即將過期的點數批次：尚有剩餘點數、未過期、且在指定天數內過期
+        $expiringLots = $customer->pointLots()
+            ->where('remaining_points', '>', 0)
+            ->whereNotNull('expired_at')
+            ->where('expired_at', '<=', $expiringThreshold)
+            ->where('expired_at', '>', now())
+            ->orderBy('expired_at', 'asc')
+            ->paginate($perPage);
+
+        return ApiResponse::success(
+            data: \App\Http\Resources\Api\V1\PointTransaction\PointLotResource::collection($expiringLots),
+            message: '即將過期的點數批次查詢成功'
+        );
     }
 }

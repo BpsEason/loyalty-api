@@ -7,6 +7,7 @@ use App\Http\Requests\Api\V1\Coupon\CouponClaimRequest;
 use App\Http\Requests\Api\V1\Coupon\CouponRedeemRequest;
 use App\Http\Resources\Api\V1\Coupon\CouponRedemptionResource;
 use App\Http\Resources\Api\V1\Coupon\UserCouponResource;
+use App\Models\CouponRedemption;
 use App\Models\CouponTemplate;
 use App\Models\Customer;
 use App\Models\UserCoupon;
@@ -101,6 +102,62 @@ class CouponController extends Controller
         } catch (\RuntimeException $e) {
             return ApiResponse::error($e->getMessage(), null, [], 400);
         }
+    }
+
+    #[OA\Get(
+        path: '/customers/{customer}/coupon-redemptions',
+        summary: 'Get list of coupon redemptions for a customer',
+        tags: ['Coupons'],
+        security: [['bearerAuth' => []]],
+        parameters: [
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+            new OA\Parameter(name: 'per_page', in: 'query', required: false, schema: new OA\Schema(type: 'integer', default: 15, maximum: 100)),
+            new OA\Parameter(name: 'start_date', in: 'query', required: false, schema: new OA\Schema(type: 'string', format: 'date')),
+            new OA\Parameter(name: 'end_date', in: 'query', required: false, schema: new OA\Schema(type: 'string', format: 'date')),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Coupon redemptions retrieved successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Coupon redemptions retrieved successfully'),
+                        new OA\Property(
+                            property: 'data',
+                            type: 'array',
+                            items: new OA\Items(ref: '#/components/schemas/CouponRedemption')
+                        ),
+                    ]
+                )
+            ),
+        ]
+    )]
+    public function redemptionHistory(Request $request, Customer $customer, TenantContext $tenantContext): JsonResponse
+    {
+        // 驗證租戶
+        $tenant = $tenantContext->getTenant();
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
+        $perPage = min((int) $request->input('per_page', 15), 100);
+        $query = CouponRedemption::where('customer_id', $customer->id);
+
+        // 按日期範圍過濾
+        if ($request->has('start_date')) {
+            $query->whereDate('redeemed_at', '>=', $request->input('start_date'));
+        }
+        if ($request->has('end_date')) {
+            $query->whereDate('redeemed_at', '<=', $request->input('end_date'));
+        }
+
+        $redemptions = $query->latest('redeemed_at')->paginate($perPage);
+
+        return ApiResponse::success(
+            data: CouponRedemptionResource::collection($redemptions),
+            message: 'Coupon redemptions retrieved successfully'
+        );
     }
 
     #[OA\Get(
@@ -261,6 +318,102 @@ class CouponController extends Controller
             return ApiResponse::success(
                 data: new CouponRedemptionResource($redemption),
                 message: 'Coupon redeemed successfully'
+            );
+        } catch (\RuntimeException $e) {
+            return ApiResponse::error($e->getMessage(), null, [], 400);
+        }
+    }
+
+    #[OA\Post(
+        path: '/customers/{customer}/mixed-payment',
+        summary: '混合支付：同時使用優惠券和點數',
+        tags: ['Coupons'],
+        security: [['bearerAuth' => []]],
+        parameters: [
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+            new OA\Parameter(name: 'X-Tenant-ID', in: 'header', required: false, schema: new OA\Schema(type: 'integer')),
+            new OA\Parameter(name: 'Idempotency-Key', in: 'header', required: false, schema: new OA\Schema(type: 'string')),
+        ],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\JsonContent(
+                required: ['reference', 'order_amount'],
+                properties: [
+                    new OA\Property(property: 'reference', type: 'string', example: 'PAYMENT-12345'),
+                    new OA\Property(property: 'order_reference', type: 'string', nullable: true, example: 'ORDER-67890'),
+                    new OA\Property(property: 'order_amount', type: 'integer', example: 1000, minimum: 0),
+                    new OA\Property(property: 'user_coupon_id', type: 'integer', nullable: true, example: 1),
+                    new OA\Property(property: 'points_amount', type: 'integer', nullable: true, example: 300, minimum: 0),
+                ]
+            )
+        ),
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: '混合支付處理成功',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: '混合支付處理成功'),
+                        new OA\Property(
+                            property: 'data',
+                            type: 'object',
+                            properties: [
+                                new OA\Property(property: 'original_amount', type: 'integer', example: 1000),
+                                new OA\Property(property: 'discount_amount', type: 'integer', example: 100),
+                                new OA\Property(property: 'points_used', type: 'integer', example: 300),
+                                new OA\Property(property: 'final_amount', type: 'integer', example: 600),
+                            ]
+                        ),
+                    ]
+                )
+            ),
+            new OA\Response(
+                response: 400,
+                description: '混合支付處理失敗',
+            ),
+            new OA\Response(
+                response: 404,
+                description: '客戶或資源未找到',
+            ),
+        ]
+    )]
+    public function mixedPayment(\App\Http\Requests\Api\V1\Coupon\MixedPaymentRequest $request, Customer $customer, CouponService $couponService, TenantContext $tenantContext): JsonResponse
+    {
+        // 驗證租戶
+        $tenant = $tenantContext->getTenant();
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
+        $validated = $request->validated();
+
+        // 獲取用戶優惠券（如果提供了）
+        $userCoupon = null;
+        if (isset($validated['user_coupon_id'])) {
+            $userCoupon = UserCoupon::where('id', $validated['user_coupon_id'])
+                ->where('customer_id', $customer->id)
+                ->first();
+
+            if (!$userCoupon) {
+                return ApiResponse::error('優惠券不存在或不屬於此客戶', null, [], 404);
+            }
+        }
+
+        try {
+            $result = $couponService->mixedPayment(
+                $customer,
+                $userCoupon,
+                $validated['order_amount'],
+                $validated['points_amount'] ?? 0,
+                $validated['reference'],
+                $validated['order_reference'] ?? null,
+                auth()->id()
+            );
+
+            return ApiResponse::success(
+                data: $result,
+                message: '混合支付處理成功'
             );
         } catch (\RuntimeException $e) {
             return ApiResponse::error($e->getMessage(), null, [], 400);

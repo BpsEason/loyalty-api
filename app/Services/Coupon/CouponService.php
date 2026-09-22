@@ -16,6 +16,202 @@ use RuntimeException;
 class CouponService
 {
     /**
+     * 混合支付：同時使用優惠券和點數
+     * 
+     * 實現原子操作：優惠券核銷與點數扣除在同一事務中完成，任一失敗都會回滾
+     */
+    public function mixedPayment(
+        Customer $customer,
+        ?UserCoupon $userCoupon,
+        int $orderAmount,
+        int $pointsAmount,
+        string $reference,
+        ?string $orderReference = null,
+        ?int $createdBy = null
+    ): array {
+        $currentTenantId = $this->tenantResolver->getCurrentTenantId();
+        if ($currentTenantId !== null) {
+            $this->assertTenantConsistency(
+                $customer->tenant_id,
+                $currentTenantId,
+                '無法操作其他租戶的客戶'
+            );
+            if ($userCoupon) {
+                $this->assertTenantConsistency(
+                    $userCoupon->tenant_id,
+                    $currentTenantId,
+                    '無法使用其他租戶的優惠券'
+                );
+            }
+        }
+
+        // 如果沒有使用任何優惠，直接返回錯誤
+        if (!$userCoupon && $pointsAmount <= 0) {
+            throw new RuntimeException('至少需要使用一項優惠（優惠券或點數）');
+        }
+
+        // 建立客戶的鎖，防止並發操作
+        $customerLockKey = sprintf('mixed_payment_customer:%d:tenant:%d', $customer->id, $customer->tenant_id);
+
+        try {
+            return Cache::lock($customerLockKey, $this->lockTTL)->block($this->lockWaitSeconds, function () use (
+                $customer,
+                $userCoupon,
+                $orderAmount,
+                $pointsAmount,
+                $reference,
+                $orderReference,
+                $createdBy
+            ) {
+                return DB::transaction(function () use (
+                    $customer,
+                    $userCoupon,
+                    $orderAmount,
+                    $pointsAmount,
+                    $reference,
+                    $orderReference,
+                    $createdBy
+                ) {
+                    $discountAmount = 0;
+                    $redemption = null;
+                    $pointTransaction = null;
+
+                    // 1. 處理優惠券核銷
+                    if ($userCoupon) {
+                        // 鎖定用戶優惠券
+                        /** @var UserCoupon $userCoupon */
+                        $userCoupon = UserCoupon::where('id', $userCoupon->id)->lockForUpdate()->firstOrFail();
+
+                        // 檢查優惠券是否屬於該客戶
+                        if ($userCoupon->customer_id !== $customer->id) {
+                            throw new RuntimeException('優惠券不屬於此客戶');
+                        }
+
+                        // 檢查是否可以核銷
+                        if (!$userCoupon->isRedeemable()) {
+                            throw new RuntimeException('優惠券無法使用，可能已過期或已使用');
+                        }
+
+                        // 計算折扣金額
+                        $discountAmount = $userCoupon->calculateDiscount($orderAmount);
+
+                        // 更新優惠券狀態為已使用
+                        $userCoupon->update([
+                            'status' => UserCoupon::STATUS_USED,
+                            'used_at' => now(),
+                            'reference' => $reference,
+                        ]);
+
+                        // 建立核銷記錄
+                        $redemption = CouponRedemption::create([
+                            'tenant_id' => $userCoupon->tenant_id,
+                            'user_coupon_id' => $userCoupon->id,
+                            'customer_id' => $userCoupon->customer_id,
+                            'reference' => $reference,
+                            'order_reference' => $orderReference,
+                            'discount_amount' => $discountAmount,
+                            'redeemed_at' => now(),
+                            'created_by' => $createdBy,
+                        ]);
+                    }
+
+                    // 2. 計算折扣後的應付金額
+                    $afterCouponAmount = $orderAmount - $discountAmount;
+
+                    // 3. 處理點數扣除
+                    if ($pointsAmount > 0) {
+                        // 獲取點數帳戶並鎖定
+                        $pointAccount = $customer->pointAccount()->lockForUpdate()->firstOrFail();
+
+                        // 驗證點數餘額
+                        if ($pointAccount->balance < $pointsAmount) {
+                            throw new RuntimeException('點數餘額不足');
+                        }
+
+                        // 驗證點數不能超過折扣後的金額
+                        if ($pointsAmount > $afterCouponAmount) {
+                            throw new RuntimeException('點數折抵不能超過優惠券折扣後的應付金額');
+                        }
+
+                        // 按照FIFO順序扣除點數
+                        $remainingToDeduct = $pointsAmount;
+
+                        while ($remainingToDeduct > 0) {
+                            $lot = $pointAccount->pointLots()
+                                ->where('remaining_points', '>', 0)
+                                ->where(function ($query) {
+                                    $query->whereNull('expired_at')
+                                        ->orWhere('expired_at', '>', now());
+                                })
+                                ->orderBy('earned_at', 'asc')
+                                ->orderBy('id', 'asc')
+                                ->lockForUpdate()
+                                ->first();
+
+                            if (!$lot) {
+                                throw new RuntimeException('點數批次不足，無法完成兌換');
+                            }
+
+                            $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
+                            $lot->update([
+                                'remaining_points' => $lot->remaining_points - $deductFromLot
+                            ]);
+                            $remainingToDeduct -= $deductFromLot;
+                        }
+
+                        // 更新點數帳戶餘額
+                        $balanceBefore = $pointAccount->balance;
+                        $balanceAfter = $balanceBefore - $pointsAmount;
+
+                        $updated = $pointAccount->where('id', $pointAccount->id)
+                            ->where('balance', '>=', $pointsAmount)
+                            ->update([
+                                'balance' => $balanceAfter,
+                                'total_redeemed' => $pointAccount->total_redeemed + $pointsAmount,
+                            ]);
+
+                        if ($updated === 0) {
+                            throw new RuntimeException('點數餘額不足，交易失敗');
+                        }
+
+                        // 建立點數交易記錄
+                        $pointTransaction = \App\Models\PointTransaction::create([
+                            'tenant_id' => $pointAccount->tenant_id,
+                            'customer_id' => $pointAccount->customer_id,
+                            'point_account_id' => $pointAccount->id,
+                            'type' => \App\Models\PointTransaction::TYPE_REDEEM,
+                            'amount' => $pointsAmount,
+                            'balance_before' => $balanceBefore,
+                            'balance_after' => $balanceAfter,
+                            'description' => '混合支付點數折抵',
+                            'reference' => $reference,
+                            'created_by' => $createdBy,
+                        ]);
+                    }
+
+                    // 計算最終應付金額
+                    $finalAmount = max(0, $afterCouponAmount - $pointsAmount);
+
+                    return [
+                        'success' => true,
+                        'coupon_redemption' => $redemption,
+                        'point_transaction' => $pointTransaction,
+                        'original_amount' => $orderAmount,
+                        'discount_amount' => $discountAmount,
+                        'points_used' => $pointsAmount,
+                        'final_amount' => $finalAmount,
+                    ];
+                }, 3);
+            });
+        } catch (LockTimeoutException $e) {
+            throw new RuntimeException('系統繁忙，請稍後再試', 0, $e);
+        } catch (\Exception $e) {
+            report($e);
+            throw $e;
+        }
+    }
+
+    /**
      * 嘗試取得鎖的最長等待時間（秒）
      */
     protected int $lockWaitSeconds = 10;
