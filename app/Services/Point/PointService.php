@@ -374,6 +374,19 @@ class PointService
     }
 
     /**
+     * 確保客戶的點數帳戶存在
+     * 
+     * 如果客戶還沒有點數帳戶，會自動建立；如果已存在，直接回傳
+     * 保持與其他點數操作相同的locking和transaction機制
+     */
+    public function ensurePointAccount(Customer $customer): PointAccount
+    {
+        return $this->executeInLock($customer, function (PointAccount $account) {
+            return $account;
+        });
+    }
+
+    /**
      * 退款點數（將兌換的點數退回）
      * 
      * 保留歷史累計，不倒扣 total_redeemed，因為該欄位代表歷史總兌換量
