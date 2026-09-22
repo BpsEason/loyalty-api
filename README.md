@@ -84,7 +84,8 @@ Detailed architecture decisions are documented under `/docs/adr`.
 | ADR-005 | No Microservices Yet              | ✅ Implemented |
 | ADR-006 | Idempotency Strategy              | ✅ Implemented |
 | ADR-007 | Point Lot & Expiration Strategy   | ✅ Implemented |
-| ADR-008 | Coupon System                     | 🚧 In Progress |
+| ADR-008 | Coupon System                     | ✅ Implemented |
+| ADR-009 | Coupon / Reward API Boundary      | ✅ Implemented |
 
 ---
 
@@ -229,14 +230,71 @@ DatabaseIdempotencyMiddleware
 
 ## 適用的 API 端點
 
-- `POST /api/v1/customers/{customer}/point-transactions`
-- `POST /api/v1/customers/{customer}/points/redeem`
-- `POST /api/v1/coupon-templates/{template}/claim`（優惠券領取）
-- `POST /api/v1/user-coupons/{userCoupon}/redeem`（優惠券核銷）
+以下寫入操作套用 `idempotent` middleware，重複請求相同 `Idempotency-Key` 時不會重複執行業務操作：
+
+| 端點                                                            | 說明                                                 |
+| --------------------------------------------------------------- | ---------------------------------------------------- |
+| `POST /api/v1/customers/{customer}/point-transactions`          | 點數異動（earn / redeem / adjust / refund / expire） |
+| `POST /api/v1/customers/{customer}/points/redeem`               | POS 點數兌換語意捷徑                                 |
+| `POST /api/v1/customers/{customer}/coupons/claim`               | 優惠券領取                                           |
+| `POST /api/v1/customers/{customer}/coupons/{userCoupon}/redeem` | 優惠券核銷                                           |
+| `POST /api/v1/customers/{customer}/mixed-payment`               | 混合支付（優惠券 + 點數）                            |
+| `POST /api/v1/customers/{customer}/rewards/grant`               | 獎勵發放                                             |
 
 ---
 
-# 9. Failure Scenarios
+# 9. API Documentation
+
+本系統提供完整的 RESTful API，所有客戶端API都位於 `/api/v1/` 前綴下。完整的互動式API文檔可通過以下地址訪問：
+
+**Swagger UI**: `/api/documentation`
+
+## API 概覽表格
+
+| API Domain              | Endpoint                                                             | Method | Purpose                                          | Auth Required | Tenant Required | Idempotent |
+| ----------------------- | -------------------------------------------------------------------- | ------ | ------------------------------------------------ | ------------- | --------------- | ---------- |
+| **Authentication**      |                                                                      |        |                                                  |               |                 |            |
+| Auth                    | `/api/v1/auth/login`                                                 | POST   | 用戶登錄獲取JWT令牌                              | ❌            | ❌              | ❌         |
+| Auth                    | `/api/v1/auth/logout`                                                | POST   | 登出並失效當前令牌                               | ✅            | ❌              | ❌         |
+| Auth                    | `/api/v1/auth/refresh`                                               | POST   | 刷新JWT訪問令牌                                  | ✅            | ❌              | ❌         |
+| Auth                    | `/api/v1/auth/me`                                                    | GET    | 獲取當前認證用戶信息                             | ✅            | ✅              | ❌         |
+| **Customer Management** |                                                                      |        |                                                  |               |                 |            |
+| Customer                | `/api/v1/customers`                                                  | GET    | 獲取租戶下的會員列表                             | ✅            | ✅              | ❌         |
+| Customer                | `/api/v1/customers/{customer}`                                       | GET    | 獲取單個會員詳情                                 | ✅            | ✅              | ❌         |
+| Customer                | `/api/v1/customers`                                                  | POST   | 創建新會員                                       | ✅            | ✅              | ❌         |
+| Customer                | `/api/v1/customers/{customer}`                                       | PUT    | 更新會員資料                                     | ✅            | ✅              | ❌         |
+| Customer                | `/api/v1/customers/{customer}`                                       | DELETE | 刪除會員                                         | ✅            | ✅              | ❌         |
+| Customer                | `/api/v1/customers/{customer}/qr-code`                               | GET    | 獲取會員QR碼（用於POS掃描）                      | ✅            | ✅              | ❌         |
+| Customer                | `/api/v1/customers/identify`                                         | POST   | 通過QR token識別會員                             | ✅            | ✅              | ❌         |
+| **Points System**       |                                                                      |        |                                                  |               |                 |            |
+| Points                  | `/api/v1/customers/{customer}/points`                                | GET    | 查詢會員當前點數餘額                             | ✅            | ✅              | ❌         |
+| Point Transactions      | `/api/v1/customers/{customer}/point-transactions`                    | GET    | 獲取點數交易歷史                                 | ✅            | ✅              | ❌         |
+| Point Transactions      | `/api/v1/customers/{customer}/point-transactions/expiring`           | GET    | 獲取即將過期的點數明細                           | ✅            | ✅              | ❌         |
+| Point Transactions      | `/api/v1/customers/{customer}/point-transactions/{pointTransaction}` | GET    | 獲取單筆交易明細                                 | ✅            | ✅              | ❌         |
+| Point Transactions      | `/api/v1/customers/{customer}/point-transactions`                    | POST   | 通用點數異動（earn/redeem/adjust/refund/expire） | ✅            | ✅              | ✅         |
+| Points                  | `/api/v1/customers/{customer}/points/redeem`                         | POST   | POS專用點數兌換語意捷徑                          | ✅            | ✅              | ✅         |
+| **Coupon System**       |                                                                      |        |                                                  |               |                 |            |
+| Coupons                 | `/api/v1/customers/{customer}/coupons`                               | GET    | 獲取會員持有的優惠券列表                         | ✅            | ✅              | ❌         |
+| Coupons                 | `/api/v1/customers/{customer}/coupons/{userCoupon}`                  | GET    | 獲取單張優惠券詳情                               | ✅            | ✅              | ❌         |
+| Coupons                 | `/api/v1/customers/{customer}/coupons/claim`                         | POST   | 領取優惠券                                       | ✅            | ✅              | ✅         |
+| Coupons                 | `/api/v1/customers/{customer}/coupons/{userCoupon}/redeem`           | POST   | 核銷優惠券                                       | ✅            | ✅              | ✅         |
+| Coupons                 | `/api/v1/customers/{customer}/coupon-redemptions`                    | GET    | 查詢優惠券核銷歷史                               | ✅            | ✅              | ❌         |
+| Mixed Payment           | `/api/v1/customers/{customer}/mixed-payment`                         | POST   | 混合支付（優惠券+點數）                          | ✅            | ✅              | ✅         |
+| **Reward System**       |                                                                      |        |                                                  |               |                 |            |
+| Rewards                 | `/api/v1/customers/{customer}/reward-grants`                         | GET    | 獲取獎勵發放記錄                                 | ✅            | ✅              | ❌         |
+| Rewards                 | `/api/v1/customers/{customer}/rewards/grant`                         | POST   | 手動發放獎勵                                     | ✅            | ✅              | ✅         |
+
+### 所有寫入API的冪等性要求
+
+標記為 `Idempotent = ✅` 的API必須在請求頭中攜帶 `Idempotency-Key: <unique-key>`，確保網路重試不會導致重複交易。詳見 [ADR-006: Idempotency Strategy](docs/adr/ADR-006-idempotency-strategy.md)。
+
+### 租戶解析機制
+
+所有需要 `Tenant Required = ✅` 的API都會自動從認證的用戶中解析出所屬租戶，並通過全域作用域確保租戶資料隔離。詳見 [ADR-002: Shared Database Multi-Tenancy](docs/adr/ADR-002-shared-database-tenancy.md)。
+
+---
+
+# 10. Failure Scenarios
 
 系統針對各種失敗場景都有相應的保護機制，詳細的失敗分析請參考 `/docs/failure-analysis.md`。
 
@@ -255,7 +313,7 @@ DatabaseIdempotencyMiddleware
 
 ---
 
-# 10. Database Design
+# 11. Database Design
 
 ## 實體關係圖
 
@@ -296,7 +354,7 @@ Tenant
 
 ---
 
-# 11. Performance & Query Optimization
+# 12. Performance & Query Optimization
 
 ## Query Performance Verification
 
@@ -332,7 +390,7 @@ MySQL 的預設交易隔離級別為 **REPEATABLE READ**。本系統依賴 `SELE
 
 ---
 
-# 12. Scalability & Capacity Planning
+# 13. Scalability & Capacity Planning
 
 ## Capacity Planning Target
 
@@ -480,6 +538,67 @@ The same redeem transaction must not be refunded twice
 
 API 使用 L5-Swagger / OpenAPI 自動生成文件，可透過 `/api/documentation` 存取。
 
+## 16.1 API 端點總覽
+
+所有端點均以 `/api/v1` 為前綴。除 `POST /auth/login` 外，所有端點均需要 `Authorization: Bearer <JWT>` header。
+
+### Authentication
+
+| Method | Path            | 說明                   | Auth | Tenant | Idempotent |
+| ------ | --------------- | ---------------------- | ---- | ------ | ---------- |
+| POST   | `/auth/login`   | 取得 JWT Token         | ❌   | ❌     | ❌         |
+| POST   | `/auth/logout`  | 登出並使 Token 失效    | ✅   | ❌     | ❌         |
+| POST   | `/auth/refresh` | 刷新 JWT Token         | ✅   | ❌     | ❌         |
+| GET    | `/auth/me`      | 取得目前登入使用者資訊 | ✅   | ✅     | ❌         |
+
+### Customer
+
+| Method    | Path                            | 說明                               | Auth | Tenant | Idempotent |
+| --------- | ------------------------------- | ---------------------------------- | ---- | ------ | ---------- |
+| GET       | `/customers`                    | 列出客戶（分頁）                   | ✅   | ✅     | ❌         |
+| POST      | `/customers`                    | 新增客戶                           | ✅   | ✅     | ❌         |
+| GET       | `/customers/{customer}`         | 取得指定客戶                       | ✅   | ✅     | ❌         |
+| PUT/PATCH | `/customers/{customer}`         | 更新客戶資料                       | ✅   | ✅     | ❌         |
+| DELETE    | `/customers/{customer}`         | 刪除客戶                           | ✅   | ✅     | ❌         |
+| GET       | `/customers/{customer}/qr-code` | 取得客戶 QR Code                   | ✅   | ✅     | ❌         |
+| POST      | `/customers/identify`           | 透過 QR Token 識別客戶（POS 掃碼） | ✅   | ✅     | ❌         |
+
+### Points
+
+| Method | Path                                                          | 說明                                                       | Auth | Tenant | Idempotent |
+| ------ | ------------------------------------------------------------- | ---------------------------------------------------------- | ---- | ------ | ---------- |
+| GET    | `/customers/{customer}/points`                                | 取得點數帳戶餘額                                           | ✅   | ✅     | ❌         |
+| GET    | `/customers/{customer}/point-transactions`                    | 查詢點數交易記錄（分頁、篩選）                             | ✅   | ✅     | ❌         |
+| GET    | `/customers/{customer}/point-transactions/expiring`           | 查詢即將過期的點數                                         | ✅   | ✅     | ❌         |
+| GET    | `/customers/{customer}/point-transactions/{pointTransaction}` | 取得單筆交易明細                                           | ✅   | ✅     | ❌         |
+| POST   | `/customers/{customer}/point-transactions`                    | 點數異動（type: earn / redeem / adjust / refund / expire） | ✅   | ✅     | ✅         |
+| POST   | `/customers/{customer}/points/redeem`                         | POS 點數兌換（語意捷徑）                                   | ✅   | ✅     | ✅         |
+
+### Coupon
+
+| Method | Path                                                | 說明                         | Auth | Tenant | Idempotent |
+| ------ | --------------------------------------------------- | ---------------------------- | ---- | ------ | ---------- |
+| GET    | `/customers/{customer}/coupons`                     | 列出客戶持有的優惠券（分頁） | ✅   | ✅     | ❌         |
+| GET    | `/customers/{customer}/coupons/{userCoupon}`        | 取得單張優惠券               | ✅   | ✅     | ❌         |
+| POST   | `/customers/{customer}/coupons/claim`               | 客戶領取優惠券（輸入 code）  | ✅   | ✅     | ✅         |
+| POST   | `/customers/{customer}/coupons/{userCoupon}/redeem` | 核銷優惠券                   | ✅   | ✅     | ✅         |
+| GET    | `/customers/{customer}/coupon-redemptions`          | 查詢優惠券核銷歷史（分頁）   | ✅   | ✅     | ❌         |
+
+### Mixed Payment
+
+| Method | Path                                  | 說明                              | Auth | Tenant | Idempotent |
+| ------ | ------------------------------------- | --------------------------------- | ---- | ------ | ---------- |
+| POST   | `/customers/{customer}/mixed-payment` | 混合支付（優惠券 + 點數同時使用） | ✅   | ✅     | ✅         |
+
+### Reward
+
+| Method | Path                                  | 說明                         | Auth | Tenant | Idempotent |
+| ------ | ------------------------------------- | ---------------------------- | ---- | ------ | ---------- |
+| GET    | `/customers/{customer}/reward-grants` | 查詢客戶獎勵發放歷史（分頁） | ✅   | ✅     | ❌         |
+| POST   | `/customers/{customer}/rewards/grant` | 對客戶發放指定活動獎勵       | ✅   | ✅     | ✅         |
+
+> **注意**：Campaign（行銷活動）與 CampaignReward（活動獎勵設定）屬於後台管理功能，透過 Filament Admin Panel 管理，不提供公開 API。詳見 [ADR-009](docs/adr/ADR-009-reward-api-boundary.md)。
+
 ---
 
 # 17. Admin Panel
@@ -590,25 +709,15 @@ docs/
 ├── adr/                # Architecture Decision Records
 │   ├── ADR-001-modular-monolith.md
 │   ├── ADR-002-shared-database-tenancy.md
-│   ├── ADR-003-redis-db-lock.md
+│   ├── ADR-003-point-transaction-locking.md
 │   ├── ADR-004-jwt-authentication.md
-│   └── ADR-005-no-microservices-yet.md
+│   ├── ADR-005-no-microservices-yet.md
+│   ├── ADR-006-idempotency-strategy.md
+│   ├── ADR-007-point-lot-expiration-strategy.md
+│   ├── ADR-008-coupon-system.md
+│   └── ADR-009-reward-api-boundary.md
 │
-├── design/             # 系統設計細節
-│   ├── point-ledger.md
-│   ├── point-lot.md
-│   ├── coupon.md
-│   └── multi-tenancy.md
-│
-├── scalability/        # 可擴展性規劃
-│   ├── capacity-planning.md
-│   ├── load-testing.md
-│   └── database-sharding.md
-│
-└── failure-analysis/   # 失敗場景與容錯設計
-    ├── deadlock-handling.md
-    ├── network-partition.md
-    └── disaster-recovery.md
+└── failure-analysis.md # 失敗場景與容錯設計
 ```
 
 ---
@@ -625,7 +734,8 @@ docs/
 | Point Ledger            | 100%   | ✅ 穩定運行 |
 | Point Lot FIFO          | 95%    | 🚧 完善中   |
 | Idempotency             | 100%   | ✅ 完整實作 |
-| Coupon System           | 85%    | 🚧 完善中   |
+| Coupon System           | 100%   | ✅ 穩定運行 |
+| Reward Grant API        | 100%   | ✅ 穩定運行 |
 
 ## 生產環境就緒度
 
