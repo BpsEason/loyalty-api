@@ -1883,8 +1883,28 @@
                         "in": "query",
                         "required": false,
                         "schema": {
+                            "description": "Get points expiring within this many days",
                             "type": "integer",
                             "default": 30
+                        }
+                    },
+                    {
+                        "name": "before",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Get points expiring before this date (Y-m-d H:i:s)",
+                            "type": "string",
+                            "format": "date-time"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "description": "Limit number of results returned",
+                            "type": "integer"
                         }
                     },
                     {

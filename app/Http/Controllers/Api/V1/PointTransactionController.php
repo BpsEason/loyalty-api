@@ -11,6 +11,7 @@ use App\Services\Point\PointService;
 use App\Support\Api\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Carbon\Carbon;
 use OpenApi\Attributes as OA;
 
 /**
@@ -340,7 +341,9 @@ class PointTransactionController extends Controller
         security: [['bearerAuth' => []]],
         parameters: [
             new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
-            new OA\Parameter(name: 'days', in: 'query', required: false, schema: new OA\Schema(type: 'integer', default: 30)),
+            new OA\Parameter(name: 'days', in: 'query', required: false, schema: new OA\Schema(type: 'integer', default: 30, description: 'Get points expiring within this many days')),
+            new OA\Parameter(name: 'before', in: 'query', required: false, schema: new OA\Schema(type: 'string', format: 'date-time', description: 'Get points expiring before this date (Y-m-d H:i:s)')),
+            new OA\Parameter(name: 'limit', in: 'query', required: false, schema: new OA\Schema(type: 'integer', description: 'Limit number of results returned')),
             new OA\Parameter(name: 'per_page', in: 'query', required: false, schema: new OA\Schema(type: 'integer', default: 15, maximum: 100)),
         ],
         responses: [
@@ -365,18 +368,37 @@ class PointTransactionController extends Controller
         }
 
         $days = (int) $request->input('days', 30);
+        $before = $request->input('before');
+        $limit = $request->input('limit');
         $perPage = min((int) $request->input('per_page', 15), 100);
 
-        $expiringThreshold = now()->addDays($days);
+        // 計算過期門檻：如果提供 before 參數，使用它；否則使用 days
+        if ($before) {
+            try {
+                $expiringThreshold = Carbon::parse($before);
+            } catch (\Exception $e) {
+                return ApiResponse::error('Invalid before date format. Use Y-m-d H:i:s.', null, [], 422);
+            }
+        } else {
+            $expiringThreshold = now()->addDays($days);
+        }
 
-        // 查詢即將過期的點數批次：尚有剩餘點數、未過期、且在指定天數內過期
-        $expiringLots = $customer->pointLots()
+        // 查詢即將過期的點數批次：尚有剩餘點數、未過期、且在指定時間內過期
+        $query = $customer->pointLots()
             ->where('remaining_points', '>', 0)
             ->whereNotNull('expired_at')
             ->where('expired_at', '<=', $expiringThreshold)
             ->where('expired_at', '>', now())
-            ->orderBy('expired_at', 'asc')
-            ->paginate($perPage);
+            ->orderBy('expired_at', 'asc') // 按過期日期升序，FIFO 順序
+            ->orderBy('earned_at', 'asc')
+            ->orderBy('id', 'asc');
+
+        // 如果提供 limit 參數，只返回前 N 筆（用於簡單查詢）
+        if ($limit) {
+            $expiringLots = $query->limit((int)$limit)->get();
+        } else {
+            $expiringLots = $query->paginate($perPage);
+        }
 
         return ApiResponse::success(
             data: \App\Http\Resources\Api\V1\PointTransaction\PointLotResource::collection($expiringLots),
