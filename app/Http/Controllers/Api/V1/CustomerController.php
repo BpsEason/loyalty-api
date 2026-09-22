@@ -282,6 +282,88 @@ class CustomerController extends Controller
         );
     }
 
+    #[OA\Get(
+        path: '/customers/{customer}/membership',
+        summary: 'Get customer membership tier information',
+        tags: ['Customers'],
+        security: [['bearerAuth' => []]],
+        parameters: [
+            new OA\Parameter(name: 'customer', in: 'path', required: true, schema: new OA\Schema(type: 'integer')),
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Membership information retrieved successfully',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'success', type: 'boolean', example: true),
+                        new OA\Property(property: 'message', type: 'string', example: 'Membership information retrieved successfully'),
+                        new OA\Property(
+                            property: 'data',
+                            properties: [
+                                new OA\Property(property: 'customer', ref: '#/components/schemas/Customer'),
+                                new OA\Property(property: 'current_tier', type: 'object'),
+                                new OA\Property(property: 'threshold_type', type: 'string', example: 'spend'),
+                                new OA\Property(property: 'current_progress', type: 'number', example: 5000),
+                                new OA\Property(property: 'next_tier', type: 'object', nullable: true),
+                                new OA\Property(property: 'remaining_amount', type: 'number', example: 5000),
+                                new OA\Property(property: 'current_benefits', type: 'object'),
+                            ]
+                        ),
+                    ]
+                )
+            ),
+        ]
+    )]
+    public function getMembership(Customer $customer, \App\Support\Tenancy\TenantContext $tenantContext): JsonResponse
+    {
+        // 確保客戶屬於當前租戶
+        $tenant = $tenantContext->getTenant();
+        if ($tenant && $customer->tenant_id !== $tenant->id) {
+            return ApiResponse::error('Customer not found', null, [], 404);
+        }
+
+        // 確保客戶有最新的會員等級
+        $customer->updateMembershipTier();
+        $customer->load('membershipTier');
+
+        $currentTier = $customer->membershipTier;
+        $currentValue = $currentTier && $currentTier->threshold_type === 'spend'
+            ? $customer->total_spend
+            : $customer->total_points_earned;
+
+        $nextTier = $currentTier ? $currentTier->getNextTier() : null;
+        $remainingAmount = $nextTier ? max(0, $nextTier->upgrade_threshold - $currentValue) : 0;
+
+        $data = [
+            'customer' => new \App\Http\Resources\Api\V1\Customer\CustomerResource($customer),
+            'current_tier' => $currentTier ? [
+                'id' => $currentTier->id,
+                'name' => $currentTier->name,
+                'slug' => $currentTier->slug,
+            ] : null,
+            'threshold_type' => $currentTier?->threshold_type,
+            'current_progress' => $currentValue,
+            'next_tier' => $nextTier ? [
+                'id' => $nextTier->id,
+                'name' => $nextTier->name,
+                'slug' => $nextTier->slug,
+                'upgrade_threshold' => $nextTier->upgrade_threshold,
+            ] : null,
+            'remaining_amount' => $remainingAmount,
+            'current_benefits' => $currentTier ? [
+                'points_multiplier' => $currentTier->points_multiplier,
+                'discount_rate' => $currentTier->discount_rate,
+                'free_shipping' => $currentTier->free_shipping,
+            ] : null,
+        ];
+
+        return ApiResponse::success(
+            data: $data,
+            message: 'Membership information retrieved successfully'
+        );
+    }
+
     #[OA\Put(
         path: '/customers/{customer}',
         summary: 'Update a customer',

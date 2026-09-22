@@ -10,6 +10,7 @@ use App\Models\CampaignReward;
 use App\Models\RewardGrant;
 use App\Models\PointAccount;
 use App\Models\PointTransaction;
+use App\Models\MembershipTier;
 use App\Services\Reward\RewardService;
 use App\Services\Point\PointService;
 use Illuminate\Database\Seeder;
@@ -193,6 +194,36 @@ class RewardSeeder extends Seeder
 
 
 
+    // 每個租戶的會員等級配置
+    protected array $tenantMembershipTierData = [
+        'retail' => [ // 零售通 - 使用消費金額門檻
+            'threshold_type' => 'spend',
+            'tiers' => [
+                ['name' => '一般會員', 'slug' => 'bronze', 'sort_order' => 1, 'upgrade_threshold' => 0, 'points_multiplier' => 1.00, 'discount_rate' => 0.0000, 'free_shipping' => false],
+                ['name' => '銀卡會員', 'slug' => 'silver', 'sort_order' => 2, 'upgrade_threshold' => 10000, 'points_multiplier' => 1.10, 'discount_rate' => 0.0200, 'free_shipping' => false],
+                ['name' => '金卡會員', 'slug' => 'gold', 'sort_order' => 3, 'upgrade_threshold' => 50000, 'points_multiplier' => 1.25, 'discount_rate' => 0.0500, 'free_shipping' => false],
+                ['name' => '白金會員', 'slug' => 'platinum', 'sort_order' => 4, 'upgrade_threshold' => 100000, 'points_multiplier' => 1.50, 'discount_rate' => 0.1000, 'free_shipping' => true],
+            ]
+        ],
+        'coffee' => [ // 咖啡日常 - 使用消費金額門檻
+            'threshold_type' => 'spend',
+            'tiers' => [
+                ['name' => '一般會員', 'slug' => 'bronze', 'sort_order' => 1, 'upgrade_threshold' => 0, 'points_multiplier' => 1.00, 'discount_rate' => 0.0000, 'free_shipping' => false],
+                ['name' => '銀卡會員', 'slug' => 'silver', 'sort_order' => 2, 'upgrade_threshold' => 5000, 'points_multiplier' => 1.10, 'discount_rate' => 0.0300, 'free_shipping' => false],
+                ['name' => '金卡會員', 'slug' => 'gold', 'sort_order' => 3, 'upgrade_threshold' => 20000, 'points_multiplier' => 1.30, 'discount_rate' => 0.0600, 'free_shipping' => true],
+            ]
+        ],
+        'fitness' => [ // 動力健身 - 使用累積點數門檻
+            'threshold_type' => 'points',
+            'tiers' => [
+                ['name' => '一般會員', 'slug' => 'bronze', 'sort_order' => 1, 'upgrade_threshold' => 0, 'points_multiplier' => 1.00, 'discount_rate' => 0.0000, 'free_shipping' => false],
+                ['name' => '銀卡會員', 'slug' => 'silver', 'sort_order' => 2, 'upgrade_threshold' => 1000, 'points_multiplier' => 1.15, 'discount_rate' => 0.0400, 'free_shipping' => false],
+                ['name' => '金卡會員', 'slug' => 'gold', 'sort_order' => 3, 'upgrade_threshold' => 5000, 'points_multiplier' => 1.35, 'discount_rate' => 0.0800, 'free_shipping' => true],
+                ['name' => '白金會員', 'slug' => 'platinum', 'sort_order' => 4, 'upgrade_threshold' => 10000, 'points_multiplier' => 1.60, 'discount_rate' => 0.1200, 'free_shipping' => true],
+            ]
+        ],
+    ];
+
     // 額外為活躍會員建立歷史點數交易的時間軸
     protected array $historicalTransactions = [
         'retail' => [
@@ -240,6 +271,8 @@ class RewardSeeder extends Seeder
             'grants_skipped' => 0,
             'grants_failed' => 0,
             'historical_transactions_created' => 0,
+            'membership_tiers_created' => 0,
+            'customers_assigned_tiers' => 0,
         ];
 
         // 處理每個Demo租戶
@@ -264,7 +297,15 @@ class RewardSeeder extends Seeder
                 continue;
             }
 
-            // 3. 建立租戶的活動與獎勵
+            // 3. 建立租戶的會員等級
+            $tenantTiers = $this->createTenantMembershipTiers($tenantKey, $tenant, $stats);
+
+            // 4. 為客戶分配會員等級
+            if (!empty($tenantTiers) && !empty($tenantCustomers)) {
+                $this->assignMembershipTiersToCustomers($tenantKey, $tenant, $tenantCustomers, $tenantTiers, $stats);
+            }
+
+            // 5. 建立租戶的活動與獎勵
             $tenantCampaigns = $this->createTenantCampaigns($tenantKey, $tenant, $stats);
 
             // 4. 依配置發放獎勵給客戶
@@ -294,6 +335,75 @@ class RewardSeeder extends Seeder
         $this->command->line("  取得租戶現有客戶：共 {$customers->count()} 位客戶");
 
         return $customers;
+    }
+
+    /**
+     * 為租戶建立會員等級
+     */
+    protected function createTenantMembershipTiers(string $tenantKey, Tenant $tenant, array &$stats): array
+    {
+        $tierConfig = $this->tenantMembershipTierData[$tenantKey] ?? null;
+        if (!$tierConfig) {
+            $this->command->line("    ⚠ 此租戶未配置會員等級，跳過建立");
+            return [];
+        }
+
+        $createdTiers = [];
+        foreach ($tierConfig['tiers'] as $tierData) {
+            /** @var MembershipTier $tier */
+            $tier = MembershipTier::firstOrCreate(
+                ['tenant_id' => $tenant->id, 'slug' => $tierData['slug']],
+                array_merge($tierData, [
+                    'tenant_id' => $tenant->id,
+                    'threshold_type' => $tierConfig['threshold_type'],
+                    'status' => true,
+                ])
+            );
+
+            if ($tier->wasRecentlyCreated) {
+                $stats['membership_tiers_created']++;
+                $this->command->line("    ✓ 建立會員等級：{$tier->name}");
+            } else {
+                $this->command->line("    會員等級已存在：{$tier->name}");
+            }
+
+            $createdTiers[] = $tier;
+        }
+
+        return $createdTiers;
+    }
+
+    /**
+     * 為客戶分配會員等級
+     */
+    protected function assignMembershipTiersToCustomers(string $tenantKey, Tenant $tenant, $tenantCustomers, $tenantTiers, array &$stats): void
+    {
+        // 依升級門檻排序會員等級（從低到高）
+        usort($tenantTiers, fn($a, $b) => $a->upgrade_threshold <=> $b->upgrade_threshold);
+
+        $customerCount = count($tenantCustomers);
+        $tierCount = count($tenantTiers);
+
+        // 依照客戶索引分配不同等級，創建合理的分布
+        foreach ($tenantCustomers as $index => $customer) {
+            // 計算該客戶應該分配的等級索引，讓各等級都有客戶
+            $tierIndex = min((int) floor(($index / $customerCount) * $tierCount), $tierCount - 1);
+            $assignedTier = $tenantTiers[$tierIndex];
+
+            // 如果客戶尚未分配等級，才進行更新
+            if (!$customer->membership_tier_id) {
+                $customer->update([
+                    'membership_tier_id' => $assignedTier->id,
+                    'tier_updated_at' => now(),
+                    // 根據等級門檻設定合理的累積消費/點數
+                    'total_spend' => $tenantKey !== 'fitness' ? $assignedTier->upgrade_threshold + rand(0, 1000) : 0,
+                    'total_points_earned' => $tenantKey === 'fitness' ? $assignedTier->upgrade_threshold + rand(0, 500) : 0,
+                ]);
+                $stats['customers_assigned_tiers']++;
+            }
+        }
+
+        $this->command->line("    已為客戶分配會員等級，共 {$stats['customers_assigned_tiers']} 位客戶獲得等級");
     }
 
 
@@ -534,6 +644,8 @@ class RewardSeeder extends Seeder
         $this->command->line(sprintf("跳過發放：%d（已發放過）", $stats['grants_skipped']));
         $this->command->line(sprintf("發放失敗：%d", $stats['grants_failed']));
         $this->command->line(sprintf("歷史交易：%d", $stats['historical_transactions_created']));
+        $this->command->line(sprintf("新增會員等級：%d", $stats['membership_tiers_created']));
+        $this->command->line(sprintf("客戶分配等級：%d", $stats['customers_assigned_tiers']));
         $this->command->line(str_repeat('=', 60));
 
         // 查詢最終資料庫中的統計數據
@@ -548,6 +660,7 @@ class RewardSeeder extends Seeder
         $this->command->line(sprintf("RewardGrant 總數：%d", \App\Models\RewardGrant::count()));
         $this->command->line(sprintf("PointAccount 總數：%d", \App\Models\PointAccount::count()));
         $this->command->line(sprintf("PointTransaction 總數：%d", \App\Models\PointTransaction::count()));
+        $this->command->line(sprintf("MembershipTier 總數：%d", \App\Models\MembershipTier::count()));
         // Coupon 相關統計由 CouponSeeder 負責輸出
     }
 }

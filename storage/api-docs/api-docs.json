@@ -1314,6 +1314,82 @@
                 ]
             }
         },
+        "/customers/{customer}/membership": {
+            "get": {
+                "tags": [
+                    "Customers"
+                ],
+                "summary": "Get customer membership tier information",
+                "operationId": "cdbc336062ac267a05b790498d1b9440",
+                "parameters": [
+                    {
+                        "name": "customer",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Membership information retrieved successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Membership information retrieved successfully"
+                                        },
+                                        "data": {
+                                            "properties": {
+                                                "customer": {
+                                                    "$ref": "#/components/schemas/Customer"
+                                                },
+                                                "current_tier": {
+                                                    "type": "object"
+                                                },
+                                                "threshold_type": {
+                                                    "type": "string",
+                                                    "example": "spend"
+                                                },
+                                                "current_progress": {
+                                                    "type": "number",
+                                                    "example": 5000
+                                                },
+                                                "next_tier": {
+                                                    "type": "object",
+                                                    "nullable": true
+                                                },
+                                                "remaining_amount": {
+                                                    "type": "number",
+                                                    "example": 5000
+                                                },
+                                                "current_benefits": {
+                                                    "type": "object"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
         "/customers/{customer}/points": {
             "get": {
                 "tags": [

@@ -7,10 +7,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use OwenIt\Auditing\Contracts\Auditable;
 
-class Customer extends Model
+class Customer extends Model implements Auditable
 {
     use BelongsToTenant;
+    use \OwenIt\Auditing\Auditable;
 
     protected $fillable = [
         'tenant_id',
@@ -20,10 +22,17 @@ class Customer extends Model
         'metadata',
         'member_code',
         'qr_token',
+        'membership_tier_id',
+        'total_spend',
+        'total_points_earned',
+        'tier_updated_at',
     ];
 
     protected $casts = [
         'metadata' => 'array',
+        'total_spend' => 'decimal:2',
+        'total_points_earned' => 'decimal:2',
+        'tier_updated_at' => 'datetime',
     ];
 
     /**
@@ -135,5 +144,66 @@ class Customer extends Model
     public function userCoupons(): HasMany
     {
         return $this->hasMany(\App\Models\UserCoupon::class);
+    }
+
+    /**
+     * 客戶的會員等級
+     */
+    public function membershipTier(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\MembershipTier::class);
+    }
+
+    /**
+     * 更新客戶的會員等級
+     */
+    public function updateMembershipTier()
+    {
+        if (!$this->membershipTier || !$this->membershipTier->threshold_type) {
+            // 如果沒有當前等級或閾值類型，嘗試取得第一個可用的等級
+            $tier = \App\Models\MembershipTier::where('tenant_id', $this->tenant_id)
+                ->where('status', true)
+                ->orderBy('upgrade_threshold', 'asc')
+                ->first();
+
+            if ($tier) {
+                $this->membership_tier_id = $tier->id;
+                $this->tier_updated_at = now();
+                $this->save();
+            }
+            return;
+        }
+
+        // 根據當前等級的閾值類型計算是否需要升級
+        $thresholdType = $this->membershipTier->threshold_type;
+        $totalValue = $thresholdType === 'spend' ? $this->total_spend : $this->total_points_earned;
+
+        $eligibleTier = \App\Models\MembershipTier::getEligibleTier($totalValue, $thresholdType, $this->tenant_id);
+
+        if ($eligibleTier && $eligibleTier->id !== $this->membership_tier_id) {
+            $this->membership_tier_id = $eligibleTier->id;
+            $this->tier_updated_at = now();
+            $this->save();
+        }
+    }
+
+    /**
+     * 增加累積消費金額
+     */
+    public function addTotalSpend($amount)
+    {
+        $this->total_spend += $amount;
+        $this->save();
+        $this->updateMembershipTier();
+    }
+
+    /**
+     * 增加累積獲得點數
+     */
+    public function addTotalPointsEarned($points)
+    {
+        $this->total_points_earned += $points;
+        $this->save();
+        $this->updateMembershipTier();
     }
 }

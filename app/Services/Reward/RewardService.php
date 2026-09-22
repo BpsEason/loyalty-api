@@ -46,6 +46,119 @@ class RewardService
     }
 
     /**
+     * 取得交易+規則的鎖定鍵，防止Campaign規則重複發放
+     */
+    protected function getCampaignRuleLockKey(Customer $customer, $transactionId, \App\Models\CampaignRule $campaignRule): string
+    {
+        return sprintf(
+            'campaign_rule:tenant:%d:customer:%d:transaction:%d:rule:%d',
+            $customer->tenant_id,
+            $customer->id,
+            $transactionId,
+            $campaignRule->id
+        );
+    }
+
+    /**
+     * 根據消費交易評估並發放符合條件的Campaign規則獎勵
+     */
+    public function processTransactionForCampaignRules(Customer $customer, float $spendAmount, array $purchasedProducts, $transactionId = null)
+    {
+        // 首先確保交易ID存在，用於冪等性控制
+        if (!$transactionId) {
+            $transactionId = time(); // 備用方案，實際場景應由調用者傳入真實交易ID
+        }
+
+        // 取得當前租戶的所有活躍活動
+        $activeCampaigns = \App\Models\Campaign::where('tenant_id', $customer->tenant_id)
+            ->where('status', \App\Models\Campaign::STATUS_ACTIVE)
+            ->where('starts_at', '<=', now())
+            ->where(function ($query) {
+                $query->whereNull('ends_at')->orWhere('ends_at', '>=', now());
+            })
+            ->get();
+
+        $grantedRewards = [];
+
+        foreach ($activeCampaigns as $campaign) {
+            // 取得活動的所有啟用規則
+            $rules = \App\Models\CampaignRule::getActiveRulesForCampaign($campaign);
+
+            foreach ($rules as $rule) {
+                // 檢查是否符合此規則條件
+                if ($rule->isEligible($spendAmount, $purchasedProducts)) {
+                    // 嘗試獲取鎖，防止重複發放
+                    $lockKey = $this->getCampaignRuleLockKey($customer, $transactionId, $rule);
+                    $lock = \Illuminate\Support\Facades\Cache::lock($lockKey, 10);
+
+                    try {
+                        $lock->block(5, function () use ($customer, $rule, &$grantedRewards) {
+                            // 檢查是否已經為此交易和規則發放過獎勵
+                            $existingGrant = \App\Models\RewardGrant::where('tenant_id', $customer->tenant_id)
+                                ->where('customer_id', $customer->id)
+                                ->where('campaign_id', $rule->campaign_id)
+                                ->where('metadata->rule_id', $rule->id)
+                                ->where('metadata->transaction_id', $transactionId)
+                                ->first();
+
+                            if (!$existingGrant) {
+                                // 使用PointService發放點數，遵循現有點數邏輯
+                                if ($rule->points_reward > 0) {
+                                    // 先增加客戶的累計點數，觸發會員等級檢查
+                                    $customer->addTotalPointsEarned($rule->points_reward);
+
+                                    // 建立點數交易記錄，使用現有PointService
+                                    $pointTransaction = $this->pointService->addPoints(
+                                        $customer,
+                                        $rule->points_reward,
+                                        'campaign_rule',
+                                        [
+                                            'campaign_id' => $rule->campaign_id,
+                                            'rule_id' => $rule->id,
+                                            'transaction_id' => request()->input('reference'),
+                                        ]
+                                    );
+
+                                    // 建立RewardGrant記錄
+                                    $rewardGrant = \App\Models\RewardGrant::create([
+                                        'tenant_id' => $customer->tenant_id,
+                                        'campaign_id' => $rule->campaign_id,
+                                        'campaign_reward_id' => null,
+                                        'customer_id' => $customer->id,
+                                        'status' => \App\Models\RewardGrant::STATUS_GRANTED,
+                                        'metadata' => [
+                                            'rule_id' => $rule->id,
+                                            'points_awarded' => $rule->points_reward,
+                                            'transaction_id' => $transactionId,
+                                            'transaction_reference' => request()->input('reference'),
+                                        ],
+                                    ]);
+
+                                    $grantedRewards[] = [
+                                        'rule' => $rule,
+                                        'points_awarded' => $rule->points_reward,
+                                        'point_transaction_id' => $pointTransaction->id,
+                                        'reward_grant_id' => $rewardGrant->id,
+                                    ];
+                                }
+                            }
+                        });
+                    } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+                        // 記錄鎖超時但不中斷流程
+                        report($e);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // 消費金額也需要加到客戶的累計消費中，觸發會員等級檢查
+        $customer->addTotalSpend($spendAmount);
+
+        return $grantedRewards;
+    }
+
+    /**
      * 建立新的活動
      */
     public function createCampaign(array $data): Campaign

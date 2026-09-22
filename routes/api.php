@@ -19,6 +19,7 @@ Route::prefix('v1')->group(function () {
         Route::middleware(['auth:api', 'tenant'])->group(function () {
             // Customer API routes
             Route::apiResource('customers', CustomerController::class);
+            Route::get('customers/{customer}/membership', [CustomerController::class, 'getMembership']);
 
             // Point Account API routes
             Route::get('customers/{customer}/points', [\App\Http\Controllers\Api\V1\PointAccountController::class, 'show']);

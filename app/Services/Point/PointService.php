@@ -62,7 +62,7 @@ class PointService
      * DB Transaction 保證原子性
      * lockForUpdate() 保證資料庫級別的串行化，即使 Cache Lock 失效仍能保證一致性
      */
-    protected function executeInLock(Customer $customer, callable $callback): PointTransaction
+    protected function executeInLock(Customer $customer, callable $callback): mixed
     {
         $lockKey = $this->getLockKey($customer);
 
@@ -449,6 +449,72 @@ class PointService
             ]);
 
             return $transaction;
+        });
+    }
+
+    /**
+     * 處理客戶所有已到期的點數批次
+     * 
+     * 自動找出所有已過期的批次，一次性處理所有過期點數
+     * 保持與其他點數操作相同的locking和transaction機制
+     * 回傳處理的過期點數總額和建立的交易記錄
+     */
+    public function expireAllExpiredLots(Customer $customer): array
+    {
+        return $this->executeInLock($customer, function (PointAccount $account) {
+            // 找出該客戶所有需要過期的批次：remaining_points > 0 且 expired_at < now()
+            $expiredLots = $account->pointLots()
+                ->where('remaining_points', '>', 0)
+                ->whereNotNull('expired_at')
+                ->where('expired_at', '<', now())
+                ->orderBy('expired_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->lockForUpdate()
+                ->get();
+
+            if ($expiredLots->isEmpty()) {
+                return [0, null];
+            }
+
+            $totalExpireAmount = 0;
+            $balanceBefore = $account->balance;
+
+            // 處理每個過期批次
+            foreach ($expiredLots as $lot) {
+                $expireAmount = $lot->remaining_points;
+                $totalExpireAmount += $expireAmount;
+
+                // 將該批次的剩餘點數設為0
+                $lot->update([
+                    'remaining_points' => 0,
+                ]);
+            }
+
+            // 檢查帳戶餘額是否足夠
+            if ($account->balance < $totalExpireAmount) {
+                throw new RuntimeException(
+                    "Insufficient account balance ({$account->balance}) to expire all expired points ({$totalExpireAmount}) for customer {$customer->id}."
+                );
+            }
+
+            // 更新帳戶餘額
+            $balanceAfter = $balanceBefore - $totalExpireAmount;
+            $account->update([
+                'balance' => $balanceAfter,
+            ]);
+
+            // 建立單一的過期交易記錄
+            $transaction = $this->createTransaction(
+                PointTransaction::TYPE_EXPIRE,
+                $account,
+                -$totalExpireAmount,
+                $balanceBefore,
+                $balanceAfter,
+                "Automatically expired {$totalExpireAmount} points from {$expiredLots->count()} lots",
+                null
+            );
+
+            return [$totalExpireAmount, $transaction];
         });
     }
 

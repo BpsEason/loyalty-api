@@ -6,10 +6,12 @@ use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use OwenIt\Auditing\Contracts\Auditable;
 
-class Campaign extends Model
+class Campaign extends Model implements Auditable
 {
     use BelongsToTenant;
+    use \OwenIt\Auditing\Auditable;
 
     public const STATUS_DRAFT = 'draft';
     public const STATUS_ACTIVE = 'active';
@@ -43,5 +45,13 @@ class Campaign extends Model
     public function grants(): HasMany
     {
         return $this->hasMany(RewardGrant::class);
+    }
+
+    /**
+     * 取得此活動的所有規則
+     */
+    public function rules(): HasMany
+    {
+        return $this->hasMany(\App\Models\CampaignRule::class);
     }
 }

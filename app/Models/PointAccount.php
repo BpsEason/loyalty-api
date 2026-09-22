@@ -6,10 +6,12 @@ use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use OwenIt\Auditing\Contracts\Auditable;
 
-class PointAccount extends Model
+class PointAccount extends Model implements Auditable
 {
     use BelongsToTenant;
+    use \OwenIt\Auditing\Auditable;
     protected $fillable = [
         'tenant_id',
         'customer_id',

@@ -563,4 +563,323 @@ class CustomerApiTest extends TestCase
         $pointLot = \App\Models\PointLot::where('customer_id', $this->customerA->id)->first();
         $this->assertEquals(700, $pointLot->remaining_points);
     }
+
+    // ============ GET /customers/{customer}/membership 測試 ============
+
+    #[Test]
+    public function can_retrieve_customer_current_membership_tier(): void
+    {
+        // 建立租戶A的會員等級
+        $bronzeTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Bronze',
+            'slug' => 'bronze',
+            'sort_order' => 1,
+            'upgrade_threshold' => 0,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.0,
+            'discount_rate' => 0.0,
+            'free_shipping' => false,
+        ]);
+
+        // 設定客戶的消費金額，符合Bronze等級
+        $this->customerA->update([
+            'total_spend' => 5000,
+            'total_points_earned' => 1000,
+        ]);
+
+        $token = $this->getTokenForUserA();
+
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerA->id}/membership");
+
+        $response->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.customer.id', $this->customerA->id)
+            ->assertJsonPath('data.current_tier.id', $bronzeTier->id)
+            ->assertJsonPath('data.current_tier.name', 'Bronze')
+            ->assertJsonPath('data.current_tier.slug', 'bronze');
+    }
+
+    #[Test]
+    public function spend_type_tier_uses_total_spend_for_current_progress(): void
+    {
+        // 建立spend類型的會員等級
+        $bronzeTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Bronze',
+            'slug' => 'bronze',
+            'sort_order' => 1,
+            'upgrade_threshold' => 0,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.0,
+            'discount_rate' => 0.0,
+            'free_shipping' => false,
+        ]);
+
+        // 設定客戶的消費和點數
+        $this->customerA->update([
+            'total_spend' => 5000,
+            'total_points_earned' => 1000,
+        ]);
+
+        $token = $this->getTokenForUserA();
+
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerA->id}/membership");
+
+        $response->assertOk()
+            ->assertJsonPath('data.threshold_type', 'spend')
+            ->assertJsonPath('data.current_progress', '5000.00'); // 使用total_spend，不是total_points_earned
+    }
+
+    #[Test]
+    public function points_type_tier_uses_total_points_earned_for_current_progress(): void
+    {
+        // 建立points類型的會員等級
+        $bronzeTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Bronze',
+            'slug' => 'bronze',
+            'sort_order' => 1,
+            'upgrade_threshold' => 0,
+            'threshold_type' => 'points',
+            'status' => true,
+            'points_multiplier' => 1.0,
+            'discount_rate' => 0.0,
+            'free_shipping' => false,
+        ]);
+
+        // 設定客戶的消費和點數
+        $this->customerA->update([
+            'total_spend' => 5000,
+            'total_points_earned' => 6000,
+        ]);
+
+        $token = $this->getTokenForUserA();
+
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerA->id}/membership");
+
+        $response->assertOk()
+            ->assertJsonPath('data.threshold_type', 'points')
+            ->assertJsonPath('data.current_progress', '6000.00'); // 使用total_points_earned
+    }
+
+    #[Test]
+    public function returns_next_tier_and_remaining_amount_correctly(): void
+    {
+        // 建立當前等級和下一級
+        $bronzeTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Bronze',
+            'slug' => 'bronze',
+            'sort_order' => 1,
+            'upgrade_threshold' => 0,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.0,
+            'discount_rate' => 0.0,
+            'free_shipping' => false,
+        ]);
+
+        $silverTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Silver',
+            'slug' => 'silver',
+            'sort_order' => 2,
+            'upgrade_threshold' => 10000,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.2,
+            'discount_rate' => 0.05,
+            'free_shipping' => false,
+        ]);
+
+        // 客戶目前消費5000，離下一級還差5000
+        $this->customerA->update([
+            'total_spend' => 5000,
+            'total_points_earned' => 1000,
+        ]);
+
+        $token = $this->getTokenForUserA();
+
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerA->id}/membership");
+
+        $response->assertOk();
+        $response->assertJsonPath('data.next_tier.id', $silverTier->id);
+        $response->assertJsonPath('data.next_tier.name', 'Silver');
+        $response->assertJsonPath('data.next_tier.slug', 'silver');
+        $response->assertJsonPath('data.next_tier.upgrade_threshold', '10000.00');
+        $response->assertJsonPath('data.remaining_amount', 5000);
+    }
+
+    #[Test]
+    public function returns_current_benefits_correctly(): void
+    {
+        // 建立會員等級，包含特定權益
+        $goldTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Gold',
+            'slug' => 'gold',
+            'sort_order' => 3,
+            'upgrade_threshold' => 20000,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.5,
+            'discount_rate' => 0.1,
+            'free_shipping' => true,
+        ]);
+
+        // 設定客戶消費達到Gold等級
+        $this->customerA->update([
+            'total_spend' => 25000,
+            'total_points_earned' => 5000,
+        ]);
+
+        $token = $this->getTokenForUserA();
+
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerA->id}/membership");
+
+        $response->assertOk()
+            ->assertJsonPath('data.current_benefits.points_multiplier', '1.50')
+            ->assertJsonPath('data.current_benefits.discount_rate', '0.1000')
+            ->assertJsonPath('data.current_benefits.free_shipping', true);
+    }
+
+    #[Test]
+    public function cannot_access_other_tenant_customer_membership(): void
+    {
+        // 在租戶B建立會員等級
+        $bronzeTierB = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantB->id,
+            'name' => 'Bronze',
+            'slug' => 'bronze',
+            'sort_order' => 1,
+            'upgrade_threshold' => 0,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.0,
+            'discount_rate' => 0.0,
+            'free_shipping' => false,
+        ]);
+
+        // 租戶B的客戶設定消費
+        $this->customerB->update([
+            'total_spend' => 5000,
+        ]);
+
+        // 使用租戶A的使用者token，嘗試存取租戶B的客戶會員資料
+        $tokenA = $this->getTokenForUserA();
+
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$tokenA}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerB->id}/membership");
+
+        $response->assertNotFound();
+    }
+
+    #[Test]
+    public function returns_null_next_tier_when_at_highest_tier(): void
+    {
+        // 只建立最高等級（唯一的等級）
+        $platinumTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Platinum',
+            'slug' => 'platinum',
+            'sort_order' => 1,
+            'upgrade_threshold' => 50000,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 2.0,
+            'discount_rate' => 0.2,
+            'free_shipping' => true,
+        ]);
+
+        // 客戶消費超過最高門檻
+        $this->customerA->update([
+            'total_spend' => 100000,
+            'total_points_earned' => 20000,
+        ]);
+
+        $token = $this->getTokenForUserA();
+
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerA->id}/membership");
+
+        $response->assertOk()
+            ->assertJsonPath('data.next_tier', null)
+            ->assertJsonPath('data.remaining_amount', 0);
+    }
+
+    #[Test]
+    public function api_calls_update_membership_tier_when_retrieving(): void
+    {
+        // 建立兩個會員等級
+        $bronzeTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Bronze',
+            'slug' => 'bronze',
+            'sort_order' => 1,
+            'upgrade_threshold' => 0,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.0,
+            'discount_rate' => 0.0,
+            'free_shipping' => false,
+        ]);
+
+        $silverTier = \App\Models\MembershipTier::create([
+            'tenant_id' => $this->tenantA->id,
+            'name' => 'Silver',
+            'slug' => 'silver',
+            'sort_order' => 2,
+            'upgrade_threshold' => 10000,
+            'threshold_type' => 'spend',
+            'status' => true,
+            'points_multiplier' => 1.2,
+            'discount_rate' => 0.05,
+            'free_shipping' => false,
+        ]);
+
+        // 客戶一開始只在Bronze等級，但消費已經達到Silver的門檻
+        $this->customerA->update([
+            'membership_tier_id' => $bronzeTier->id,
+            'total_spend' => 15000, // 超過Silver的10000門檻
+        ]);
+
+        $token = $this->getTokenForUserA();
+
+        // 呼叫API時應該會自動更新會員等級
+        $response = $this->withHeaders([
+            'Authorization' => "Bearer {$token}",
+            'X-Tenant-ID' => $this->tenantA->id,
+        ])->getJson("/api/v1/customers/{$this->customerA->id}/membership");
+
+        // 驗證API回傳的是Silver等級，表示updateMembershipTier()已被執行
+        $response->assertOk()
+            ->assertJsonPath('data.current_tier.id', $silverTier->id)
+            ->assertJsonPath('data.current_tier.name', 'Silver');
+
+        // 驗證資料庫中的會員等級也已更新
+        $this->customerA->refresh();
+        $this->assertEquals($silverTier->id, $this->customerA->membership_tier_id);
+    }
 }

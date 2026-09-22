@@ -14,10 +14,12 @@ use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Collection;
 use Spatie\Permission\Traits\HasRoles;
 use Tymon\JWTAuth\Contracts\JWTSubject;
+use OwenIt\Auditing\Contracts\Auditable;
 
-class User extends Authenticatable implements JWTSubject, FilamentUser, HasTenants, HasDefaultTenant
+class User extends Authenticatable implements JWTSubject, FilamentUser, HasTenants, HasDefaultTenant, Auditable
 {
     use HasFactory, Notifiable;
+    use \OwenIt\Auditing\Auditable;
     use HasRoles {
         hasRole as traitHasRole;
         roles as traitRoles;

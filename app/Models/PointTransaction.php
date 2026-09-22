@@ -6,10 +6,12 @@ use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use OwenIt\Auditing\Contracts\Auditable;
 
-class PointTransaction extends Model
+class PointTransaction extends Model implements Auditable
 {
     use BelongsToTenant;
+    use \OwenIt\Auditing\Auditable;
     public const TYPE_EARN = 'earn';
     public const TYPE_REDEEM = 'redeem';
     public const TYPE_ADJUST = 'adjust';

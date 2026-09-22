@@ -3,9 +3,10 @@
 namespace App\Console\Commands;
 
 use App\Models\Customer;
+use App\Models\Tenant;
 use App\Services\Point\PointService;
+use App\Support\Tenancy\TenantResolver;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 
 class RedeemPointsCommand extends Command
 {
@@ -16,7 +17,7 @@ class RedeemPointsCommand extends Command
 
     protected $description = '執行點數兌換（用於併發測試）';
 
-    public function handle(PointService $pointService): int
+    public function handle(PointService $pointService, \App\Support\Tenancy\TenantContext $tenantContext): int
     {
         $tenantId = $this->option('tenant-id');
         $customerId = $this->option('customer-id');
@@ -28,10 +29,11 @@ class RedeemPointsCommand extends Command
         }
 
         try {
-            // 手動設定租戶上下文
-            app()->instance('current_tenant_id', $tenantId);
+            // 透過正式的 TenantContext 設定租戶上下文
+            $tenant = Tenant::findOrFail($tenantId);
+            $tenantContext->setTenant($tenant);
 
-            $customer = Customer::findOrFail($customerId);
+            $customer = Customer::where('tenant_id', $tenantId)->findOrFail($customerId);
 
             $transaction = $pointService->redeem(
                 $customer,

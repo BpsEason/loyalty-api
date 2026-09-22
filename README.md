@@ -86,10 +86,44 @@ Detailed architecture decisions are documented under `/docs/adr`.
 | ADR-007 | Point Lot & Expiration Strategy   | ✅ Implemented |
 | ADR-008 | Coupon System                     | ✅ Implemented |
 | ADR-009 | Coupon / Reward API Boundary      | ✅ Implemented |
+| ADR-010 | Membership Tier System            | ✅ Implemented |
+| ADR-011 | Campaign Rule Engine              | ✅ Implemented |
+| ADR-012 | Audit Logging System              | ✅ Implemented |
 
 ---
 
-# 5. Multi-Tenant Isolation
+# 5. Core Features
+
+本系統已實作以下核心業務功能：
+
+## 會員等級與權益系統
+
+- 會員可依累積消費或累積點數自動判定並升級會員等級
+- 每個租戶可獨立設定自己的會員等級體系與升級門檻
+- 支援等級權益設定（點數倍增、折扣率、免運費等欄位已預留）
+- 與客戶資料、點數帳戶等核心業務流程深度整合
+- 限制：目前權益欄位僅完成資料層設定，尚未整合到實際交易結算流程中
+
+## Campaign 規則引擎
+
+- 支援兩種活動規則類型：消費滿額自動給點、指定商品購買給點
+- 規則已與既有PointService / RewardService點數發放流程整合
+- 內建冪等性機制，防止同一筆交易重複發放獎勵
+- 每個活動可設定多個規則，按優先級依次處理
+- 說明：目前為針對特定場景實作的規則系統，而非通用型規則引擎
+
+## 操作審計日誌
+
+- 自動記錄後台所有管理操作，包含操作人、操作時間、操作對象
+- 完整記錄資料變更前後的old_values與new_values，追蹤每一次修改
+- 支援租戶隔離：超級管理員可查看所有租戶記錄，一般使用者僅能查看所屬租戶的操作記錄
+- Filament後台提供審計日誌查詢、篩選功能
+- 支援Excel匯出，可下載完整的操作記錄進行離線分析
+- 僅有標記為Auditable的模型會產生審計記錄
+
+---
+
+# 6. Multi-Tenant Isolation
 
 本系統採用 **Shared Database / Shared Tables** 架構，透過 `tenant_id` 欄位區分所有租戶的資料。這是在當前系統規模下最合適的選擇，避免了維護多資料庫或多綱要的營運複雜性。
 
@@ -114,7 +148,7 @@ Detailed architecture decisions are documented under `/docs/adr`.
 
 ---
 
-# 6. Transaction Consistency
+# 7. Transaction Consistency
 
 點數交易的一致性是本系統的核心設計目標。每一筆點數異動都必須保證：
 
@@ -155,7 +189,7 @@ Commit 交易
 
 ---
 
-# 7. Concurrency Control
+# 8. Concurrency Control
 
 為了解決並發交易可能導致的 Lost Update 問題，本系統採用多層次的鎖定策略：
 
@@ -188,7 +222,7 @@ Redis 分散式鎖
 
 ---
 
-# 8. Idempotency
+# 9. Idempotency
 
 冪等性保證同一個用戶端請求不論執行多少次，都只會對伺服器端狀態產生一次改變。這對於處理網路超時後的用戶端重試至關重要。本系統遵循ADR-006的核心原則：**資料庫為唯一權威，Redis僅作快取**。
 
@@ -243,7 +277,7 @@ DatabaseIdempotencyMiddleware
 
 ---
 
-# 9. API Documentation
+# 10. API Documentation
 
 本系統提供完整的 RESTful API，所有客戶端API都位於 `/api/v1/` 前綴下。完整的互動式API文檔可通過以下地址訪問：
 
@@ -294,7 +328,7 @@ DatabaseIdempotencyMiddleware
 
 ---
 
-# 10. Failure Scenarios
+# 11. Failure Scenarios
 
 系統針對各種失敗場景都有相應的保護機制，詳細的失敗分析請參考 `/docs/failure-analysis.md`。
 
@@ -313,7 +347,7 @@ DatabaseIdempotencyMiddleware
 
 ---
 
-# 11. Database Design
+# 12. Database Design
 
 ## 實體關係圖
 
@@ -354,7 +388,7 @@ Tenant
 
 ---
 
-# 12. Performance & Query Optimization
+# 13. Performance & Query Optimization
 
 ## Query Performance Verification
 
@@ -390,7 +424,7 @@ MySQL 的預設交易隔離級別為 **REPEATABLE READ**。本系統依賴 `SELE
 
 ---
 
-# 13. Scalability & Capacity Planning
+# 14. Scalability & Capacity Planning
 
 ## Capacity Planning Target
 
@@ -453,7 +487,7 @@ Queue 延遲
 
 ---
 
-# 13. Testing & Verification
+# 15. Testing & Verification
 
 系統的測試覆蓋分為以下幾個領域，每個領域的實作狀態：
 
@@ -479,7 +513,7 @@ Queue 延遲
 
 ---
 
-# 14. Domain Invariants
+# 16. Domain Invariants
 
 本系統的業務不變量（Domain Invariants）是必須永遠成立的條件，這些都已在程式碼中實作保護：
 
