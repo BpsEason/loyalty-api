@@ -25,7 +25,7 @@ return new class extends Migration
             $table->timestamps();
 
             // Unique constraint
-            $table->unique('reference')->comment('核銷參考編號必須唯一');
+            $table->unique(['tenant_id', 'reference'])->comment('核銷參考編號在同一租戶內必須唯一');
 
             // Indexes
             $table->index(['tenant_id', 'customer_id', 'redeemed_at'])->comment('用於租戶內會員優惠券核銷紀錄查詢與時間排序');
