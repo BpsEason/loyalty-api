@@ -66,7 +66,7 @@ class RewardService
     {
         // 首先確保交易ID存在，用於冪等性控制
         if (!$transactionId) {
-            $transactionId = time(); // 備用方案，實際場景應由調用者傳入真實交易ID
+            $transactionId = \Illuminate\Support\Str::orderedUuid(); // 使用可靠的UUID作為備用方案
         }
 
         // 取得當前租戶的所有活躍活動
@@ -108,7 +108,7 @@ class RewardService
                                     $customer->addTotalPointsEarned($rule->points_reward);
 
                                     // 建立點數交易記錄，使用現有PointService
-                                    $pointTransaction = $this->pointService->addPoints(
+                                    $pointTransaction = $this->pointService->earn(
                                         $customer,
                                         $rule->points_reward,
                                         'campaign_rule',

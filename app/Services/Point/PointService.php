@@ -201,6 +201,77 @@ class PointService
     }
 
     /**
+     * 從已鎖定的點數帳戶中扣除點數（核心邏輯，供內部呼叫）
+     * 
+     * 預設條件：
+     * - 呼叫者已取得 Customer 的 Redis 鎖
+     * - 呼叫者已取得 PointAccount 的 DB 行鎖 (lockForUpdate)
+     * - 呼叫者已處於 DB transaction 中
+     * - 已驗證 account->balance >= $amount
+     * 
+     * 實現Point Lot FIFO消耗：按earned_at + id的確定性順序消耗點數批次
+     */
+    public function deductPointsFromAccount(PointAccount $account, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
+    {
+        $balanceBefore = $account->balance;
+        $remainingToDeduct = $amount;
+
+        // FIFO: 游標式消費，每次只鎖定當前需要的批次，降低死鎖風險
+        while ($remainingToDeduct > 0) {
+            $lot = $account->pointLots()
+                ->where('remaining_points', '>', 0)
+                ->where(function ($q) {
+                    $q->whereNull('expired_at')
+                        ->orWhere('expired_at', '>', now());
+                })
+                ->orderBy('earned_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->lockForUpdate() // 只鎖定當前批次
+                ->first();
+
+            if (!$lot) {
+                throw new RuntimeException('點數批次不足，無法完成兌換');
+            }
+
+            $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
+            $lot->update([
+                'remaining_points' => $lot->remaining_points - $deductFromLot
+            ]);
+            $remainingToDeduct -= $deductFromLot;
+        }
+
+        // 必須確保所有要扣除的點數都已從批次中消耗完畢
+        if ($remainingToDeduct > 0) {
+            throw new RuntimeException('點數批次不足，無法完成兌換');
+        }
+
+        $balanceAfter = $balanceBefore - $amount;
+
+        // 保持原有的資料庫層級雙重保險
+        $updated = $account->where('id', $account->id)
+            ->where('balance', '>=', $amount)
+            ->update([
+                'balance' => $balanceAfter,
+                'total_redeemed' => $account->total_redeemed + $amount,
+            ]);
+
+        if ($updated === 0) {
+            throw new RuntimeException('點數餘額不足，交易失敗');
+        }
+
+        return $this->createTransaction(
+            PointTransaction::TYPE_REDEEM,
+            $account,
+            $amount,
+            $balanceBefore,
+            $balanceAfter,
+            $description,
+            $reference,
+            $createdBy
+        );
+    }
+
+    /**
      * 客戶兌換點數
      * 
      * 實現Point Lot FIFO消耗：按earned_at + id的確定性順序消耗點數批次
@@ -215,59 +286,7 @@ class PointService
                 throw new RuntimeException('點數餘額不足');
             }
 
-            $balanceBefore = $account->balance;
-            $remainingToDeduct = $amount;
-
-            // FIFO: 游標式消費，每次只鎖定當前需要的批次，降低死鎖風險
-            while ($remainingToDeduct > 0) {
-                $lot = $account->pointLots()
-                    ->where('remaining_points', '>', 0)
-                    ->whereNull('expired_at')
-                    ->orderBy('earned_at', 'asc')
-                    ->orderBy('id', 'asc')
-                    ->lockForUpdate() // 只鎖定當前批次
-                    ->first();
-
-                if (!$lot) {
-                    throw new RuntimeException('點數批次不足，無法完成兌換');
-                }
-
-                $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
-                $lot->update([
-                    'remaining_points' => $lot->remaining_points - $deductFromLot
-                ]);
-                $remainingToDeduct -= $deductFromLot;
-            }
-
-            // 必須確保所有要扣除的點數都已從批次中消耗完畢
-            if ($remainingToDeduct > 0) {
-                throw new RuntimeException('點數批次不足，無法完成兌換');
-            }
-
-            $balanceAfter = $balanceBefore - $amount;
-
-            // 保持原有的資料庫層級雙重保險
-            $updated = $account->where('id', $account->id)
-                ->where('balance', '>=', $amount)
-                ->update([
-                    'balance' => $balanceAfter,
-                    'total_redeemed' => $account->total_redeemed + $amount,
-                ]);
-
-            if ($updated === 0) {
-                throw new RuntimeException('點數餘額不足，交易失敗');
-            }
-
-            return $this->createTransaction(
-                PointTransaction::TYPE_REDEEM,
-                $account,
-                $amount,
-                $balanceBefore,
-                $balanceAfter,
-                $description,
-                $reference,
-                $createdBy
-            );
+            return $this->deductPointsFromAccount($account, $amount, $description, $reference, $createdBy);
         });
     }
 
@@ -300,14 +319,18 @@ class PointService
                 $updateData['total_redeemed'] = $account->total_redeemed + $absAmount;
             }
 
-            // 負數調整：需要使用FIFO消耗點數批次
+            // 負數調整：需要使用FIFO消耗點數批次，使用共用的扣點邏輯
             if ($amount < 0) {
+                // 呼叫共用扣點邏輯，但指定交易類型為ADJUST
                 $remainingToDeduct = $absAmount;
 
                 // FIFO: 按earned_at ASC, id ASC排序，確保完全確定性的消耗順序
                 $lots = $account->pointLots()
                     ->where('remaining_points', '>', 0)
-                    ->whereNull('expired_at')
+                    ->where(function ($q) {
+                        $q->whereNull('expired_at')
+                            ->orWhere('expired_at', '>', now());
+                    })
                     ->orderBy('earned_at', 'asc')
                     ->orderBy('id', 'asc')
                     ->lockForUpdate()

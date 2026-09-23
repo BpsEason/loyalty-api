@@ -6,6 +6,7 @@ use App\Models\CouponTemplate;
 use App\Models\CouponRedemption;
 use App\Models\Customer;
 use App\Models\UserCoupon;
+use App\Services\Point\PointService;
 use App\Support\Tenancy\TenantResolver;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -50,8 +51,8 @@ class CouponService
             throw new RuntimeException('至少需要使用一項優惠（優惠券或點數）');
         }
 
-        // 建立客戶的鎖，防止並發操作
-        $customerLockKey = sprintf('mixed_payment_customer:%d:tenant:%d', $customer->id, $customer->tenant_id);
+        // 建立客戶的鎖，使用與PointService一致的customer-level鎖，確保所有點數變更操作串行化
+        $customerLockKey = sprintf('point_customer:%d:tenant:%d', $customer->id, $customer->tenant_id);
 
         try {
             return Cache::lock($customerLockKey, $this->lockTTL)->block($this->lockWaitSeconds, function () use (
@@ -75,8 +76,21 @@ class CouponService
                     $discountAmount = 0;
                     $redemption = null;
                     $pointTransaction = null;
+                    $pointAccount = null;
 
-                    // 1. 處理優惠券核銷
+                    // 對齊PointService的lock order：先取得PointAccount鎖，再處理其他資源
+                    // 確保與redeem()、adjust()等流程的鎖獲取順序一致，避免死鎖
+                    if ($pointsAmount > 0) {
+                        // 先獲取點數帳戶並鎖定（與PointService.executeInLock()的順序一致）
+                        $pointAccount = $customer->pointAccount()->lockForUpdate()->firstOrFail();
+
+                        // 驗證點數餘額
+                        if ($pointAccount->balance < $pointsAmount) {
+                            throw new RuntimeException('點數餘額不足');
+                        }
+                    }
+
+                    // 1. 處理優惠券核銷（在PointAccount鎖取得後才鎖定優惠券，保持鎖順序一致）
                     if ($userCoupon) {
                         // 鎖定用戶優惠券
                         /** @var UserCoupon $userCoupon */
@@ -118,75 +132,26 @@ class CouponService
                     // 2. 計算折扣後的應付金額
                     $afterCouponAmount = $orderAmount - $discountAmount;
 
-                    // 3. 處理點數扣除
+                    // 3. 處理點數扣除（PointAccount已在事務一開始就鎖定）
                     if ($pointsAmount > 0) {
-                        // 獲取點數帳戶並鎖定
-                        $pointAccount = $customer->pointAccount()->lockForUpdate()->firstOrFail();
-
-                        // 驗證點數餘額
-                        if ($pointAccount->balance < $pointsAmount) {
-                            throw new RuntimeException('點數餘額不足');
-                        }
-
                         // 驗證點數不能超過折扣後的金額
                         if ($pointsAmount > $afterCouponAmount) {
                             throw new RuntimeException('點數折抵不能超過優惠券折扣後的應付金額');
                         }
 
-                        // 按照FIFO順序扣除點數
-                        $remainingToDeduct = $pointsAmount;
-
-                        while ($remainingToDeduct > 0) {
-                            $lot = $pointAccount->pointLots()
-                                ->where('remaining_points', '>', 0)
-                                ->where(function ($query) {
-                                    $query->whereNull('expired_at')
-                                        ->orWhere('expired_at', '>', now());
-                                })
-                                ->orderBy('earned_at', 'asc')
-                                ->orderBy('id', 'asc')
-                                ->lockForUpdate()
-                                ->first();
-
-                            if (!$lot) {
-                                throw new RuntimeException('點數批次不足，無法完成兌換');
-                            }
-
-                            $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
-                            $lot->update([
-                                'remaining_points' => $lot->remaining_points - $deductFromLot
-                            ]);
-                            $remainingToDeduct -= $deductFromLot;
-                        }
-
-                        // 更新點數帳戶餘額
-                        $balanceBefore = $pointAccount->balance;
-                        $balanceAfter = $balanceBefore - $pointsAmount;
-
-                        $updated = $pointAccount->where('id', $pointAccount->id)
-                            ->where('balance', '>=', $pointsAmount)
-                            ->update([
-                                'balance' => $balanceAfter,
-                                'total_redeemed' => $pointAccount->total_redeemed + $pointsAmount,
-                            ]);
-
-                        if ($updated === 0) {
-                            throw new RuntimeException('點數餘額不足，交易失敗');
-                        }
-
-                        // 建立點數交易記錄
-                        $pointTransaction = \App\Models\PointTransaction::create([
-                            'tenant_id' => $pointAccount->tenant_id,
-                            'customer_id' => $pointAccount->customer_id,
-                            'point_account_id' => $pointAccount->id,
-                            'type' => \App\Models\PointTransaction::TYPE_REDEEM,
-                            'amount' => $pointsAmount,
-                            'balance_before' => $balanceBefore,
-                            'balance_after' => $balanceAfter,
-                            'description' => '混合支付點數折抵',
-                            'reference' => $reference,
-                            'created_by' => $createdBy,
-                        ]);
+                        // 使用PointService共用的扣點邏輯，確保唯一的business rule
+                        // 此時已滿足deductPointsFromAccount的呼叫契約：
+                        // - Customer Redis lock 已取得
+                        // - DB transaction 已開啟
+                        // - PointAccount row lock 已持有
+                        // - 已驗證balance足夠
+                        $pointTransaction = $this->pointService->deductPointsFromAccount(
+                            $pointAccount,
+                            $pointsAmount,
+                            '混合支付點數折抵',
+                            $reference,
+                            $createdBy
+                        );
                     }
 
                     // 計算最終應付金額
@@ -221,7 +186,10 @@ class CouponService
      */
     protected int $lockTTL = 20;
 
-    public function __construct(protected TenantResolver $tenantResolver) {}
+    public function __construct(
+        protected TenantResolver $tenantResolver,
+        protected PointService $pointService
+    ) {}
 
     /**
      * 驗證租戶一致性
@@ -404,9 +372,15 @@ class CouponService
             return null;
         }
 
-        return CouponTemplate::where('tenant_id', $tenantId)
+        $template = CouponTemplate::where('tenant_id', $tenantId)
             ->where('code', $code)
             ->first();
+
+        if ($template && $template->isValid()) {
+            return $template;
+        }
+
+        return null;
     }
 
     /**
