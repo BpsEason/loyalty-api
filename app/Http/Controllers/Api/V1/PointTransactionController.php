@@ -91,9 +91,14 @@ class PointTransactionController extends Controller
             $query->where('amount', '<=', (int) $request->input('max_amount'));
         }
 
-        // 按排序
-        $sortBy = $request->input('sort_by', 'created_at');
-        $sortOrder = $request->input('sort_order', 'desc');
+        // 按排序 - 使用白名單防止任意欄位排序
+        $allowedSortBy = ['created_at', 'amount', 'type'];
+        $sortBy = in_array($request->input('sort_by', 'created_at'), $allowedSortBy)
+            ? $request->input('sort_by', 'created_at')
+            : 'created_at';
+        $sortOrder = in_array($request->input('sort_order', 'desc'), ['asc', 'desc'])
+            ? $request->input('sort_order', 'desc')
+            : 'desc';
         $query->orderBy($sortBy, $sortOrder);
 
         $transactions = $query->paginate($perPage);

@@ -49,9 +49,6 @@ class PointAccountController extends Controller
     )]
     public function show(Request $request, Customer $customer): JsonResponse
     {
-        // 建議加上 Policy 授權檢查
-        // $this->authorize('view', $customer);
-
         $pointAccount = $customer->pointAccount;
 
         if (! $pointAccount) {
@@ -60,6 +57,8 @@ class PointAccountController extends Controller
                 status: 404
             );
         }
+
+
 
         return ApiResponse::success(
             data: new PointAccountResource($pointAccount),

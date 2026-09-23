@@ -11,15 +11,26 @@ use Illuminate\Auth\Access\HandlesAuthorization;
 class PointAccountPolicy
 {
     use HandlesAuthorization;
-    
+
     public function viewAny(AuthUser $authUser): bool
     {
-        return $authUser->can('ViewAny:PointAccount');
+        // Super Admin 或有權查看點數帳戶的使用者都可以查看列表
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        return $authUser->can('View:PointAccount') || $authUser->can('ViewAny:PointAccount');
     }
 
     public function view(AuthUser $authUser, PointAccount $pointAccount): bool
     {
-        return $authUser->can('View:PointAccount');
+        // Super Admin 可以查看所有點數帳戶
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能查看自己租戶的點數帳戶
+        return $authUser->can('View:PointAccount') && $authUser->tenant_id === $pointAccount->tenant_id;
     }
 
     public function create(AuthUser $authUser): bool
@@ -71,5 +82,4 @@ class PointAccountPolicy
     {
         return $authUser->can('Reorder:PointAccount');
     }
-
 }

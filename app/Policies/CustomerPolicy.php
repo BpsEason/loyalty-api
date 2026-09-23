@@ -14,12 +14,23 @@ class CustomerPolicy
 
     public function viewAny(AuthUser $authUser): bool
     {
-        return $authUser->can('ViewAny:Customer');
+        // Super Admin 或有權查看客戶的使用者都可以查看列表
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        return $authUser->can('View:Customer') || $authUser->can('ViewAny:Customer');
     }
 
     public function view(AuthUser $authUser, Customer $customer): bool
     {
-        return $authUser->can('View:Customer');
+        // Super Admin 可以查看所有客戶
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能查看自己租戶的客戶
+        return $authUser->can('View:Customer') && $authUser->tenant_id === $customer->tenant_id;
     }
 
     public function create(AuthUser $authUser): bool

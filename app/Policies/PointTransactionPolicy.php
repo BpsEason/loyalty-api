@@ -11,15 +11,26 @@ use Illuminate\Auth\Access\HandlesAuthorization;
 class PointTransactionPolicy
 {
     use HandlesAuthorization;
-    
+
     public function viewAny(AuthUser $authUser): bool
     {
-        return $authUser->can('ViewAny:PointTransaction');
+        // Super Admin 或有權查看點數交易的使用者都可以查看列表
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        return $authUser->can('View:PointTransaction') || $authUser->can('ViewAny:PointTransaction');
     }
 
     public function view(AuthUser $authUser, PointTransaction $pointTransaction): bool
     {
-        return $authUser->can('View:PointTransaction');
+        // Super Admin 可以查看所有點數交易
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能查看自己租戶的點數交易
+        return $authUser->can('View:PointTransaction') && $authUser->tenant_id === $pointTransaction->tenant_id;
     }
 
     public function create(AuthUser $authUser): bool
@@ -71,5 +82,4 @@ class PointTransactionPolicy
     {
         return $authUser->can('Reorder:PointTransaction');
     }
-
 }
