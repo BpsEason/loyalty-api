@@ -31,8 +31,8 @@ class PointAccountResource extends JsonResource
             'balance' => $this->balance,
             'total_earned' => $this->total_earned,
             'total_redeemed' => $this->total_redeemed,
-            'created_at' => $this->created_at,
-            'updated_at' => $this->updated_at,
+            'created_at' => $this->created_at?->toISOString(),
+            'updated_at' => $this->updated_at?->toISOString(),
         ];
     }
 }

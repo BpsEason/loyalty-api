@@ -43,8 +43,8 @@ class PointTransactionResource extends JsonResource
             'reference_id' => $this->reference_id,
             'description' => $this->description,
             'created_by' => $this->created_by,
-            'created_at' => $this->created_at,
-            'updated_at' => $this->updated_at,
+            'created_at' => $this->created_at?->toISOString(),
+            'updated_at' => $this->updated_at?->toISOString(),
         ];
     }
 }

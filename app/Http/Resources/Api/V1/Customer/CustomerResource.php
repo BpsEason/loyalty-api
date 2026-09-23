@@ -50,14 +50,14 @@ class CustomerResource extends JsonResource
             'phone' => $this->phone,
             'metadata' => $this->metadata,
             'member_code' => $this->member_code,
-            'qr_token' => $this->qr_token,
+            'qr_token' => $this->when(auth()->id() === $request->user()?->id || $request->routeIs('*.customers.qr-code'), $this->qr_token),
             'tenant' => $this->when($this->relationLoaded('tenant'), [
                 'id' => $this->tenant?->id,
                 'name' => $this->tenant?->name,
                 'domain' => $this->tenant?->domain,
             ]),
-            'created_at' => $this->created_at,
-            'updated_at' => $this->updated_at,
+            'created_at' => $this->created_at?->toISOString(),
+            'updated_at' => $this->updated_at?->toISOString(),
         ];
     }
 }

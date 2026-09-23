@@ -14,14 +14,16 @@ class UserResource extends JsonResource
      */
     public function toArray($request): array
     {
+        $isCurrentUser = $this->id === $request->user()?->id;
+
         return [
             'id' => $this->id,
             'name' => $this->name,
             'email' => $this->email,
             'tenant_id' => $this->tenant_id,
-            'roles' => $this->roles->pluck('name'),
-            'permissions' => $this->getAllPermissions()->pluck('name'),
-            'created_at' => $this->created_at,
+            'roles' => $this->when($isCurrentUser, $this->roles->pluck('name')),
+            'permissions' => $this->when($isCurrentUser, $this->getAllPermissions()->pluck('name')),
+            'created_at' => $this->created_at?->toISOString(),
         ];
     }
 }
