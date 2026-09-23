@@ -11,7 +11,7 @@ use Illuminate\Auth\Access\HandlesAuthorization;
 class CustomerPolicy
 {
     use HandlesAuthorization;
-    
+
     public function viewAny(AuthUser $authUser): bool
     {
         return $authUser->can('ViewAny:Customer');
@@ -29,12 +29,24 @@ class CustomerPolicy
 
     public function update(AuthUser $authUser, Customer $customer): bool
     {
-        return $authUser->can('Update:Customer');
+        // Super Admin 可以更新所有客戶
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能更新自己租戶的客戶
+        return $authUser->can('Update:Customer') && $authUser->tenant_id === $customer->tenant_id;
     }
 
     public function delete(AuthUser $authUser, Customer $customer): bool
     {
-        return $authUser->can('Delete:Customer');
+        // Super Admin 可以刪除所有客戶
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能刪除自己租戶的客戶
+        return $authUser->can('Delete:Customer') && $authUser->tenant_id === $customer->tenant_id;
     }
 
     public function deleteAny(AuthUser $authUser): bool
@@ -71,5 +83,4 @@ class CustomerPolicy
     {
         return $authUser->can('Reorder:Customer');
     }
-
 }

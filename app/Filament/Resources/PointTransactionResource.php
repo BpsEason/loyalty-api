@@ -5,9 +5,9 @@ namespace App\Filament\Resources;
 use App\Filament\Concerns\HandlesTenantScoping;
 use App\Models\PointTransaction;
 use App\Filament\Resources\PointTransactionResource\Pages;
-use Filament\Forms;
+use App\Filament\Resources\PointTransactionResource\Schemas\PointTransactionForm;
+use App\Filament\Resources\PointTransactionResource\Tables\PointTransactionTable;
 use Filament\Resources\Resource;
-use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Model;
@@ -59,97 +59,12 @@ class PointTransactionResource extends Resource
 
     public static function form(Schema $schema): Schema
     {
-        return $schema
-            ->schema([
-                \App\Forms\Components\TenantSelect::make(),
-                Forms\Components\Select::make('point_account_id')
-                    ->label('點數帳戶')
-                    ->relationship(
-                        'pointAccount',
-                        'id',
-                        function ($query, callable $get) {
-                            $user = auth()->user();
-                            $panel = filament()->getCurrentOrDefaultPanel();
-                            $tenantId = $get('tenant_id');
-
-                            if ($user && $user->isSuperAdmin()) {
-                                if ($panel?->hasTenancy()) {
-                                    $query->withoutGlobalScope($panel->getTenancyScopeName());
-                                }
-                                if ($tenantId) {
-                                    $query->where('tenant_id', $tenantId);
-                                }
-                            }
-                            // Tenant Admin 由Model全域範圍自動處理，無需手動過濾
-
-                            return $query->select('id', 'customer_id');
-                        }
-                    )
-                    ->getOptionLabelFromRecordUsing(fn($record) => "帳戶 #{$record->id} - {$record->customer->name}")
-                    ->required()
-                    ->searchable()
-                    ->reactive(),
-                Forms\Components\TextInput::make('amount')
-                    ->label('金額')
-                    ->required()
-                    ->numeric()
-                    ->disabled(fn($context) => $context !== 'create'),
-                Forms\Components\TextInput::make('type')
-                    ->label('類型')
-                    ->required()
-                    ->maxLength(50)
-                    ->disabled(fn($context) => $context !== 'create'),
-                Forms\Components\Textarea::make('description')
-                    ->label('描述')
-                    ->maxLength(65535)
-                    ->columnSpanFull()
-                    ->disabled(fn($context) => $context !== 'create'),
-                Forms\Components\KeyValue::make('metadata')
-                    ->label('中繼資料')
-                    ->disabled(true),
-            ]);
+        return PointTransactionForm::schema($schema);
     }
 
     public static function table(Table $table): Table
     {
-        return $table
-            ->query(static::getEloquentQuery())
-            ->columns([
-                Tables\Columns\TextColumn::make('pointAccount.customer.name')
-                    ->label('客戶')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('amount')
-                    ->label('金額')
-                    ->numeric()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('type')
-                    ->label('類型')
-                    ->badge(),
-                Tables\Columns\TextColumn::make('description')
-                    ->label('描述')
-                    ->limit(50),
-                Tables\Columns\TextColumn::make('tenant.name')
-                    ->label('租戶')
-                    ->searchable()
-                    ->visible(fn() => auth()->user()->hasRole('super_admin')),
-                Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable(),
-            ])
-            ->filters([
-                Tables\Filters\SelectFilter::make('type')
-                    ->label('類型')
-                    ->options([
-                        'earn' => '獲得',
-                        'redeem' => '兌換',
-                        'expire' => '過期',
-                        'adjust' => '調整',
-                    ]),
-            ])
-            ->actions([
-                \Filament\Actions\ViewAction::make(),
-            ])
-            ->bulkActions([]);
+        return PointTransactionTable::table($table);
     }
 
     public static function getRelations(): array

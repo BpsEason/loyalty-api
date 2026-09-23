@@ -11,7 +11,7 @@ use Illuminate\Auth\Access\HandlesAuthorization;
 class CampaignPolicy
 {
     use HandlesAuthorization;
-    
+
     public function viewAny(AuthUser $authUser): bool
     {
         return $authUser->can('ViewAny:Campaign');
@@ -29,12 +29,24 @@ class CampaignPolicy
 
     public function update(AuthUser $authUser, Campaign $campaign): bool
     {
-        return $authUser->can('Update:Campaign');
+        // Super Admin 可以更新所有活動
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能更新自己租戶的活動
+        return $authUser->can('Update:Campaign') && $authUser->tenant_id === $campaign->tenant_id;
     }
 
     public function delete(AuthUser $authUser, Campaign $campaign): bool
     {
-        return $authUser->can('Delete:Campaign');
+        // Super Admin 可以刪除所有活動
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能刪除自己租戶的活動
+        return $authUser->can('Delete:Campaign') && $authUser->tenant_id === $campaign->tenant_id;
     }
 
     public function deleteAny(AuthUser $authUser): bool
@@ -71,5 +83,4 @@ class CampaignPolicy
     {
         return $authUser->can('Reorder:Campaign');
     }
-
 }

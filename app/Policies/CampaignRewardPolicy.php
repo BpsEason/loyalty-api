@@ -11,7 +11,7 @@ use Illuminate\Auth\Access\HandlesAuthorization;
 class CampaignRewardPolicy
 {
     use HandlesAuthorization;
-    
+
     public function viewAny(AuthUser $authUser): bool
     {
         return $authUser->can('ViewAny:CampaignReward');
@@ -29,12 +29,24 @@ class CampaignRewardPolicy
 
     public function update(AuthUser $authUser, CampaignReward $campaignReward): bool
     {
-        return $authUser->can('Update:CampaignReward');
+        // Super Admin 可以更新所有活動獎勵
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能更新自己租戶的活動獎勵
+        return $authUser->can('Update:CampaignReward') && $authUser->tenant_id === $campaignReward->campaign?->tenant_id;
     }
 
     public function delete(AuthUser $authUser, CampaignReward $campaignReward): bool
     {
-        return $authUser->can('Delete:CampaignReward');
+        // Super Admin 可以刪除所有活動獎勵
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        // Tenant Admin 只能刪除自己租戶的活動獎勵
+        return $authUser->can('Delete:CampaignReward') && $authUser->tenant_id === $campaignReward->campaign?->tenant_id;
     }
 
     public function deleteAny(AuthUser $authUser): bool
@@ -71,5 +83,4 @@ class CampaignRewardPolicy
     {
         return $authUser->can('Reorder:CampaignReward');
     }
-
 }
