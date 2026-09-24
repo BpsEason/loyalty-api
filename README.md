@@ -159,15 +159,24 @@ Commit
 
 ---
 
-# 4.3 Outbox Pattern & Domain Event 原子性保證
+# 4.3 Transactional Outbox & Asynchronous Event Processing
 
-為了支援後續的事件驅動架構，本系統實現了 **Outbox Pattern**，確保領域事件（Domain Event）與業務資料的原子提交，避免事件丟失或狀態不一致。
+為了支援事件驅動架構，本系統實現了完整的 **Transactional Outbox Pattern**，確保領域事件（Domain Event）與業務資料的原子提交，避免事件丟失或狀態不一致。
 
-## 核心實作
-- **outbox_events 表**：所有領域事件先寫入資料庫的 outbox_events 表，而非直接發送到消息隊列
-- **事務內原子提交**：在每個業務交易的 DB::transaction() 內，將領域事件寫入 Outbox，確保業務資料與事件記錄要麼全部成功，要麼全部回滾
-- **事件類型**：目前已實作 PointEarned、PointRedeemed、RewardGranted、CouponClaimed、CouponRedeemed 等領域事件
-- **後續處理**：獨立的排程任務會掃描未處理的事件，異步發送到消息隊列，並標記處理狀態
+## 1. Transactional Outbox
+業務資料與 Outbox Event 在同一個 Database Transaction 中寫入：
+```text
+Business Transaction
+        │
+        ├── PointAccount
+        ├── PointTransaction
+        ├── PointLot
+        └── OutboxEvent
+              │
+              └── 同一個 DB Transaction
+```
+
+> 業務資料成功提交時，Outbox Event 同時存在；如果 Transaction rollback，Outbox Event 也會 rollback。
 
 **原子性保證流程**：
 ```text
@@ -181,11 +190,132 @@ lockForUpdate() 鎖定 PointAccount
     ↓
 建立 PointTransaction 交易記錄
     ↓
-寫入 PointEarned 事件到 outbox_events
+寫入領域事件到 outbox_events
     ↓
 Commit 交易
 ```
 只有當整個事務成功提交，業務資料更新與事件記錄才會同時生效，從根本上避免了「業務資料更新成功但事件發送失敗」的分布式一致性問題。
+
+## 2. Outbox Dispatcher
+使用 Artisan 命令掃描並處理待處理的 Outbox Event：
+```bash
+php artisan outbox:process-pending
+```
+
+此命令負責：
+* 找出 `processed_at IS NULL` 的事件
+* 排除已超過重試次數的事件
+* 按 `occurred_at` 排序（先進先出）
+* 每次最多處理 100 筆
+* 將 `ProcessOutboxEvent` Job  dispatch 到專用的 `outbox` queue
+
+## 3. Laravel Scheduler 整合
+Outbox Dispatcher 已接入 Laravel Scheduler，自動定期執行：
+```php
+Schedule::command('outbox:process-pending')
+    ->everyMinute()
+    ->withoutOverlapping();
+```
+
+> Dispatcher 不再依賴人工執行，而是由 Scheduler 定期掃描待處理 Outbox Event。
+
+## 4. Redis Queue 設定
+本系統使用 Redis 作為 Queue 連接，確保非同步事件處理的可靠性：
+```env
+QUEUE_CONNECTION=redis
+REDIS_CLIENT=phpredis
+REDIS_HOST=127.0.0.1
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+```
+
+Outbox Job 使用獨立的 `outbox` queue，需啟用專屬的 Worker：
+```bash
+php artisan queue:work --queue=outbox
+```
+
+Worker 負責真正執行 `ProcessOutboxEvent`，處理每個領域事件的分發。
+
+## 5. Event Processing Pipeline
+完整的事件處理流程：
+```text
+Application Service
+        │
+        ▼
+Database Transaction
+        │
+        ├── Business Data
+        │
+        └── OutboxEvent
+                │
+                ▼
+        Laravel Scheduler
+                │
+                ▼
+    outbox:process-pending
+                │
+                ▼
+        Redis Queue
+                │
+                ▼
+      ProcessOutboxEvent
+                │
+        ┌───────┴───────┐
+        │               │
+   Redis Lock      IdempotencyKey
+        │               │
+        └───────┬───────┘
+                ▼
+       Domain Event
+                │
+                ▼
+          Event Listener
+```
+
+## 6. 已實作的領域事件
+系統目前支援以下領域事件的 Outbox 處理：
+* `PointEarned`
+* `PointRedeemed`
+* `CouponClaimed`
+* `CouponRedeemed`
+* `RewardGranted`
+* `LogPointEarnedEvent`
+
+## 7. Reliability Mechanisms
+本系統實現了多層可靠性機制確保事件處理的穩定性：
+
+| 機制                   | 用途                      |
+| -------------------- | ----------------------- |
+| Transactional Outbox | 確保業務資料與事件原子寫入           |
+| Redis Queue          | 非同步處理事件                 |
+| Redis Lock           | 避免同一 Outbox Event 被並發處理 |
+| Idempotency Key      | 降低重複處理風險                |
+| Queue Retry          | 處理暫時性失敗                 |
+| `attempts`           | 記錄處理嘗試次數                |
+| `last_error`         | 保存最後一次失敗原因              |
+| `processed_at`       | 記錄事件是否成功處理              |
+
+## 8. At-Least-Once Delivery
+> Outbox Processing 採 At-Least-Once Delivery 思維設計。Queue / Worker 可能因 retry、worker failure 或 process crash 而重新執行，因此事件處理必須具備冪等性。
+
+## 9. Runtime Requirements
+Outbox 功能需要以下服務才能正常運作：
+```text
+Redis
+Laravel Scheduler
+Queue Worker
+```
+
+必須啟用兩個關鍵程序：
+```bash
+# Scheduler：定期將 pending Outbox Event dispatch 到 Queue
+php artisan schedule:work
+
+# Queue Worker：實際執行 ProcessOutboxEvent
+php artisan queue:work --queue=outbox
+```
+
+兩者責任不同，缺一不可。
 
 ---
 

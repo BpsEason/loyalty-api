@@ -13,3 +13,9 @@ Schedule::command('points:expire')
     ->dailyAt('02:00')
     ->withoutOverlapping()
     ->runInBackground();
+
+// 排程每分鐘處理待處理的 Outbox 事件
+Schedule::command('outbox:process-pending')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->runInBackground();
