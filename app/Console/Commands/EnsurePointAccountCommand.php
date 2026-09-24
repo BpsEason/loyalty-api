@@ -33,8 +33,8 @@ class EnsurePointAccountCommand extends Command
         $customer = Customer::where('tenant_id', $tenantId)->findOrFail($customerId);
 
         try {
-            // PointService::getOrCreatePointAccount 內部已自行處理 transaction 和 locking
-            $account = $pointService->getOrCreatePointAccount($customer);
+            // PointService::ensurePointAccount 會在客戶點數狀態鎖與交易邊界中建立或取得帳戶
+            $account = $pointService->ensurePointAccount($customer);
 
             $this->info('ACCOUNT_ENSURED: ' . $account->id);
             return Command::SUCCESS;

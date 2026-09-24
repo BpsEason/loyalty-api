@@ -18,8 +18,18 @@ class CouponService
 {
     /**
      * 混合支付：同時使用優惠券和點數
-     * 
-     * 實現原子操作：優惠券核銷與點數扣除在同一事務中完成，任一失敗都會回滾
+     *
+     * 原子性保證：Coupon redemption + point deduction 必須保持在同一 transaction。
+     * 任何步驟失敗都會完整 rollback，不會出現部分成功的狀態。
+     *
+     * Lock ordering：
+     * Customer Lock → PointAccount Row Lock → UserCoupon Row Lock
+     * Lock ordering is intentionally kept consistent across related operations to reduce deadlock risk.
+     * 此順序與 PointService 的所有點數操作保持一致，避免循環等待。
+     *
+     * Business rule 計算順序：
+     * Coupon Discount → Remaining Amount → Point Deduction
+     * 必須先套用優惠券折扣，再用點數折抵剩餘金額，這是業務規則要求。
      */
     public function mixedPayment(
         Customer $customer,
@@ -30,6 +40,35 @@ class CouponService
         ?string $orderReference = null,
         ?int $createdBy = null
     ): array {
+        $this->assertMixedPaymentTenantConsistency($customer, $userCoupon);
+
+        if (!$userCoupon && $pointsAmount <= 0) {
+            throw new RuntimeException('至少需要使用一項優惠（優惠券或點數）');
+        }
+
+        return $this->executeWithCustomerLoyaltyLock($customer, function () use (
+            $customer,
+            $userCoupon,
+            $orderAmount,
+            $pointsAmount,
+            $reference,
+            $orderReference,
+            $createdBy
+        ) {
+            return $this->executeMixedPayment(
+                $customer,
+                $userCoupon,
+                $orderAmount,
+                $pointsAmount,
+                $reference,
+                $orderReference,
+                $createdBy
+            );
+        });
+    }
+
+    protected function assertMixedPaymentTenantConsistency(Customer $customer, ?UserCoupon $userCoupon): void
+    {
         $currentTenantId = $this->tenantResolver->getCurrentTenantId();
         if ($currentTenantId !== null) {
             $this->assertTenantConsistency(
@@ -45,127 +84,16 @@ class CouponService
                 );
             }
         }
+    }
 
-        // 如果沒有使用任何優惠，直接返回錯誤
-        if (!$userCoupon && $pointsAmount <= 0) {
-            throw new RuntimeException('至少需要使用一項優惠（優惠券或點數）');
-        }
-
-        // 建立客戶的鎖，使用與PointService一致的customer-level鎖，確保所有點數變更操作串行化
+    protected function executeWithCustomerLoyaltyLock(Customer $customer, callable $callback): mixed
+    {
         $customerLockKey = sprintf('point_customer:%d:tenant:%d', $customer->id, $customer->tenant_id);
 
         try {
-            return Cache::lock($customerLockKey, $this->lockTTL)->block($this->lockWaitSeconds, function () use (
-                $customer,
-                $userCoupon,
-                $orderAmount,
-                $pointsAmount,
-                $reference,
-                $orderReference,
-                $createdBy
-            ) {
-                return DB::transaction(function () use (
-                    $customer,
-                    $userCoupon,
-                    $orderAmount,
-                    $pointsAmount,
-                    $reference,
-                    $orderReference,
-                    $createdBy
-                ) {
-                    $discountAmount = 0;
-                    $redemption = null;
-                    $pointTransaction = null;
-                    $pointAccount = null;
-
-                    // 對齊PointService的lock order：先取得PointAccount鎖，再處理其他資源
-                    // 確保與redeem()、adjust()等流程的鎖獲取順序一致，避免死鎖
-                    if ($pointsAmount > 0) {
-                        // 先獲取點數帳戶並鎖定（與PointService.executeInLock()的順序一致）
-                        $pointAccount = $customer->pointAccount()->lockForUpdate()->firstOrFail();
-
-                        // 驗證點數餘額
-                        if ($pointAccount->balance < $pointsAmount) {
-                            throw new RuntimeException('點數餘額不足');
-                        }
-                    }
-
-                    // 1. 處理優惠券核銷（在PointAccount鎖取得後才鎖定優惠券，保持鎖順序一致）
-                    if ($userCoupon) {
-                        // 鎖定用戶優惠券
-                        /** @var UserCoupon $userCoupon */
-                        $userCoupon = UserCoupon::where('id', $userCoupon->id)->lockForUpdate()->firstOrFail();
-
-                        // 檢查優惠券是否屬於該客戶
-                        if ($userCoupon->customer_id !== $customer->id) {
-                            throw new RuntimeException('優惠券不屬於此客戶');
-                        }
-
-                        // 檢查是否可以核銷
-                        if (!$userCoupon->isRedeemable()) {
-                            throw new RuntimeException('優惠券無法使用，可能已過期或已使用');
-                        }
-
-                        // 計算折扣金額
-                        $discountAmount = $userCoupon->calculateDiscount($orderAmount);
-
-                        // 更新優惠券狀態為已使用
-                        $userCoupon->update([
-                            'status' => UserCoupon::STATUS_USED,
-                            'used_at' => now(),
-                            'reference' => $reference,
-                        ]);
-
-                        // 建立核銷記錄
-                        $redemption = CouponRedemption::create([
-                            'tenant_id' => $userCoupon->tenant_id,
-                            'user_coupon_id' => $userCoupon->id,
-                            'customer_id' => $userCoupon->customer_id,
-                            'reference' => $reference,
-                            'order_reference' => $orderReference,
-                            'discount_amount' => $discountAmount,
-                            'redeemed_at' => now(),
-                            'created_by' => $createdBy,
-                        ]);
-                    }
-
-                    // 2. 計算折扣後的應付金額
-                    $afterCouponAmount = $orderAmount - $discountAmount;
-
-                    // 3. 處理點數扣除（PointAccount已在事務一開始就鎖定）
-                    if ($pointsAmount > 0) {
-                        // 驗證點數不能超過折扣後的金額
-                        if ($pointsAmount > $afterCouponAmount) {
-                            throw new RuntimeException('點數折抵不能超過優惠券折扣後的應付金額');
-                        }
-
-                        // 使用PointService共用的扣點邏輯，確保唯一的business rule
-                        // 此時已滿足deductPointsFromAccount的呼叫契約：
-                        // - Customer Redis lock 已取得
-                        // - DB transaction 已開啟
-                        // - PointAccount row lock 已持有
-                        // - 已驗證balance足夠
-                        $pointTransaction = $this->pointService->deductPointsFromAccount(
-                            $pointAccount,
-                            $pointsAmount,
-                            '混合支付點數折抵',
-                            $reference,
-                            $createdBy
-                        );
-                    }
-
-                    // 計算最終應付金額
-                    $finalAmount = max(0, $afterCouponAmount - $pointsAmount);
-
-                    return [
-                        'success' => true,
-                        'coupon_redemption' => $redemption,
-                        'point_transaction' => $pointTransaction,
-                        'original_amount' => $orderAmount,
-                        'discount_amount' => $discountAmount,
-                        'points_used' => $pointsAmount,
-                        'final_amount' => $finalAmount,
-                    ];
+            return Cache::lock($customerLockKey, $this->lockTTL)->block($this->lockWaitSeconds, function () use ($callback) {
+                return DB::transaction(function () use ($callback) {
+                    return $callback();
                 }, 3);
             });
         } catch (LockTimeoutException $e) {
@@ -173,6 +101,94 @@ class CouponService
         } catch (\Exception $e) {
             report($e);
             throw $e;
+        }
+    }
+
+    protected function executeMixedPayment(
+        Customer $customer,
+        ?UserCoupon $userCoupon,
+        int $orderAmount,
+        int $pointsAmount,
+        string $reference,
+        ?string $orderReference = null,
+        ?int $createdBy = null
+    ): array {
+        $discountAmount = 0;
+        $redemption = null;
+        $pointTransaction = null;
+        $pointAccount = null;
+
+        if ($pointsAmount > 0) {
+            $pointAccount = $customer->pointAccount()->lockForUpdate()->firstOrFail();
+
+            if ($pointAccount->balance < $pointsAmount) {
+                throw new RuntimeException('點數餘額不足');
+            }
+        }
+
+        if ($userCoupon) {
+            /** @var UserCoupon $userCoupon */
+            $userCoupon = UserCoupon::where('id', $userCoupon->id)->lockForUpdate()->firstOrFail();
+
+            if ($userCoupon->customer_id !== $customer->id) {
+                throw new RuntimeException('優惠券不屬於此客戶');
+            }
+
+            if (!$userCoupon->isRedeemable()) {
+                throw new RuntimeException('優惠券無法使用，可能已過期或已使用');
+            }
+
+            $discountAmount = $userCoupon->calculateDiscount($orderAmount);
+
+            $userCoupon->update([
+                'status' => UserCoupon::STATUS_USED,
+                'used_at' => now(),
+                'reference' => $reference,
+            ]);
+
+            $redemption = CouponRedemption::create([
+                'tenant_id' => $userCoupon->tenant_id,
+                'user_coupon_id' => $userCoupon->id,
+                'customer_id' => $userCoupon->customer_id,
+                'reference' => $reference,
+                'order_reference' => $orderReference,
+                'discount_amount' => $discountAmount,
+                'redeemed_at' => now(),
+                'created_by' => $createdBy,
+            ]);
+        }
+
+        $afterCouponAmount = $orderAmount - $discountAmount;
+
+        if ($pointsAmount > 0) {
+            $this->assertPointDeductionAmountDoesNotExceedPayableAmount($pointsAmount, $afterCouponAmount);
+
+            $pointTransaction = $this->pointService->deductPointsFromAccount(
+                $pointAccount,
+                $pointsAmount,
+                '混合支付點數折抵',
+                $reference,
+                $createdBy
+            );
+        }
+
+        $finalAmount = max(0, $afterCouponAmount - $pointsAmount);
+
+        return [
+            'success' => true,
+            'coupon_redemption' => $redemption,
+            'point_transaction' => $pointTransaction,
+            'original_amount' => $orderAmount,
+            'discount_amount' => $discountAmount,
+            'points_used' => $pointsAmount,
+            'final_amount' => $finalAmount,
+        ];
+    }
+
+    protected function assertPointDeductionAmountDoesNotExceedPayableAmount(int $pointsAmount, int $afterCouponAmount): void
+    {
+        if ($pointsAmount > $afterCouponAmount) {
+            throw new RuntimeException('點數折抵不能超過優惠券折扣後的應付金額');
         }
     }
 
@@ -219,6 +235,13 @@ class CouponService
 
     /**
      * 客戶領取優惠券
+     * 
+     * 兩層鎖定機制：
+     * Template-level serialization (Redis Lock + DB row lock)
+     * → protects global issuance limit (issued_quantity validation)
+     * 
+     * Customer-level serialization (Redis Lock + DB count lock)
+     * → protects per-customer claim limit (per_customer_limit validation)
      */
     public function claim(Customer $customer, CouponTemplate $template): UserCoupon
     {

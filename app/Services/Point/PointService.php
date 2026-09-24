@@ -48,58 +48,62 @@ class PointService
     }
 
     /**
-     * 取得客戶的鎖定鍵
+     * 取得客戶點數狀態的並發鎖定鍵
      */
-    protected function getLockKey(Customer $customer): string
+    protected function getCustomerPointStateLockKey(Customer $customer): string
     {
         return sprintf('point_customer:%d:tenant:%d', $customer->id, $customer->tenant_id);
     }
 
     /**
-     * 在鎖定與交易中執行操作
-     * 
-     * Cache Lock 用於降低同一客戶的並發競爭
-     * DB Transaction 保證原子性
-     * lockForUpdate() 保證資料庫級別的串行化，即使 Cache Lock 失效仍能保證一致性
+     * 在客戶點數狀態鎖與資料庫交易邊界內執行點數操作
+     *
+     * Redis Lock (Cache::lock) 解決 application-level contention / serialization，
+     * 但無法替代資料庫層的正確性保證。完整的保護鏈為：
+     *
+     * Redis Lock → DB Transaction → lockForUpdate()
+     *
+     * 各層負責不同級別的保護：
+     * - Redis Lock：減少應用層的競爭，避免大量請求同時進入資料庫
+     * - DB Transaction：保證所有操作的原子性
+     * - lockForUpdate()：資料庫級別的行鎖，是最終的一致性邊界，即使 Redis Lock 失效仍能保護正確性
+     *
+     * Redis 不可用時 fallback 到 DB locking，correctness 不降低，但 performance / contention characteristics 可能改變。
+     * 交易最多重試 3 次，處理短暫的資料庫死鎖。
      */
-    protected function executeInLock(Customer $customer, callable $callback): mixed
+    protected function executeWithCustomerPointStateLock(Customer $customer, callable $callback): mixed
     {
-        $lockKey = $this->getLockKey($customer);
+        $lockKey = $this->getCustomerPointStateLockKey($customer);
 
         try {
             $lock = Cache::lock($lockKey, $this->lockTTL);
 
-            // 使用 block 自旋等待，自動處理鎖釋放
             return $lock->block($this->lockWaitSeconds, function () use ($customer, $callback) {
-                // 加入 3 次重試處理短暫的資料庫死鎖
                 return DB::transaction(function () use ($customer, $callback) {
-                    $account = $this->getOrCreatePointAccount($customer);
+                    $account = $this->lockOrCreatePointAccount($customer);
                     return $callback($account);
                 }, 3);
             });
         } catch (LockTimeoutException $e) {
             throw new RuntimeException('系統繁忙，請稍後再試', 0, $e);
         } catch (\Exception $e) {
-            // Redis連接故障降級：依賴資料庫行鎖保證一致性
-            report($e); // 記錄Redis故障日誌
+            report($e);
 
-            // 即使Redis不可用，仍然依賴資料庫的lockForUpdate行鎖來保護一致性
             return DB::transaction(function () use ($customer, $callback) {
-                $account = $this->getOrCreatePointAccount($customer);
+                $account = $this->lockOrCreatePointAccount($customer);
                 return $callback($account);
             }, 3);
         }
     }
 
     /**
-     * 取得或建立客戶的點數帳戶（保證回傳持有 lockForUpdate 的實體）
-     * 
+     * 取得或建立客戶的點數帳戶，並持有 DB 行鎖以保護帳戶狀態初始化與更新
+     *
      * 處理並發建立帳戶的 race condition，依賴資料庫的 unique(['tenant_id', 'customer_id']) 約束
      * 永遠回傳已持有資料庫行鎖的帳戶實體
      */
-    protected function getOrCreatePointAccount(Customer $customer): PointAccount
+    protected function lockOrCreatePointAccount(Customer $customer): PointAccount
     {
-        // 驗證當前租戶與客戶租戶一致
         $currentTenantId = $this->tenantResolver->getCurrentTenantId();
         if ($currentTenantId !== null) {
             $this->assertTenantConsistency(
@@ -109,7 +113,6 @@ class PointService
             );
         }
 
-        // 1. 先嘗試取得現有帳戶並加上行鎖 (FOR UPDATE)
         /** @var PointAccount|null $account */
         $account = $customer->pointAccount()->lockForUpdate()->first();
 
@@ -122,7 +125,6 @@ class PointService
             return $account;
         }
 
-        // 2. 帳戶不存在時嘗試建立
         try {
             $customer->pointAccount()->create([
                 'tenant_id' => $customer->tenant_id,
@@ -131,7 +133,6 @@ class PointService
                 'total_redeemed' => 0,
             ]);
 
-            // 建立後重新以 lockForUpdate 載入，確保本事務內一致持有 DB 行鎖
             $account = $customer->pointAccount()->lockForUpdate()->firstOrFail();
 
             $this->assertTenantConsistency(
@@ -141,7 +142,6 @@ class PointService
             );
             return $account;
         } catch (UniqueConstraintViolationException $e) {
-            // 並發狀況下若被其他請求先建立，再次以 lockForUpdate 鎖定讀取
             $account = $customer->pointAccount()->lockForUpdate()->firstOrFail();
 
             $this->assertTenantConsistency(
@@ -155,25 +155,23 @@ class PointService
 
     /**
      * 為客戶新增點數
-     * 
+     *
      * 實現Point Lot FIFO：建立新的點數批次，與餘額更新在同一事務中完成
      */
     public function earn(Customer $customer, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
     {
         $this->validatePositiveAmount($amount, '點數必須為正數');
 
-        return $this->executeInLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
             $balanceBefore = $account->balance;
             $balanceAfter = $balanceBefore + $amount;
 
-            // 更新帳戶餘額
             $account->update([
                 'balance' => $balanceAfter,
                 'total_earned' => $account->total_earned + $amount,
             ]);
 
-            // 建立交易記錄
-            $transaction = $this->createTransaction(
+            $transaction = $this->recordPointTransaction(
                 PointTransaction::TYPE_EARN,
                 $account,
                 $amount,
@@ -184,7 +182,6 @@ class PointService
                 $createdBy
             );
 
-            // 建立Point Lot（在同一事務中）
             PointLot::create([
                 'tenant_id' => $account->tenant_id,
                 'customer_id' => $account->customer_id,
@@ -192,7 +189,7 @@ class PointService
                 'original_points' => $amount,
                 'remaining_points' => $amount,
                 'earned_at' => now(),
-                'expired_at' => null, // 可由後續排程設定過期時間
+                'expired_at' => null,
                 'origin_transaction_id' => $transaction->id,
             ]);
 
@@ -201,53 +198,31 @@ class PointService
     }
 
     /**
-     * 從已鎖定的點數帳戶中扣除點數（核心邏輯，供內部呼叫）
-     * 
-     * 預設條件：
-     * - 呼叫者已取得 Customer 的 Redis 鎖
-     * - 呼叫者已取得 PointAccount 的 DB 行鎖 (lockForUpdate)
-     * - 呼叫者已處於 DB transaction 中
-     * - 已驗證 account->balance >= $amount
-     * 
-     * 實現Point Lot FIFO消耗：按earned_at + id的確定性順序消耗點數批次
+     * 從已鎖定的點數帳戶中扣除點數，依照 FIFO 批次順序消耗可用點數
+     *
+     * 呼叫者契約：
+     * - 必須已取得 Customer 的 Redis 鎖
+     * - 必須已取得 PointAccount 的 DB 行鎖 (lockForUpdate)
+     * - 必須已處於 DB transaction 中
+     * - 必須已驗證 account->balance >= $amount
+     *
+     * Point Lot FIFO 消費設計：
+     * - 依 earned_at 排序：確保先獲得的點數先被消耗，符合先進先出原則
+     * - id 作為 deterministic tie-breaker：處理同一毫秒獲得的多個批次，保證消耗順序永遠一致
+     * - 逐筆消費（while loop + 每次只lock一個批次）：避免一次鎖定所有可用的 Lot，降低鎖範圍和死鎖風險
+     * - 鎖範圍與交易範圍一致：所有批次鎖都在同一 DB transaction 中釋放
+     *
+     * Defense-in-depth against negative balance：最後的 WHERE balance >= $amount 原子更新
+     * 是最後一道防線，即使前面的驗證都失效，資料庫層仍能阻止負餘額。
      */
     public function deductPointsFromAccount(PointAccount $account, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
     {
         $balanceBefore = $account->balance;
-        $remainingToDeduct = $amount;
 
-        // FIFO: 游標式消費，每次只鎖定當前需要的批次，降低死鎖風險
-        while ($remainingToDeduct > 0) {
-            $lot = $account->pointLots()
-                ->where('remaining_points', '>', 0)
-                ->where(function ($q) {
-                    $q->whereNull('expired_at')
-                        ->orWhere('expired_at', '>', now());
-                })
-                ->orderBy('earned_at', 'asc')
-                ->orderBy('id', 'asc')
-                ->lockForUpdate() // 只鎖定當前批次
-                ->first();
-
-            if (!$lot) {
-                throw new RuntimeException('點數批次不足，無法完成兌換');
-            }
-
-            $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
-            $lot->update([
-                'remaining_points' => $lot->remaining_points - $deductFromLot
-            ]);
-            $remainingToDeduct -= $deductFromLot;
-        }
-
-        // 必須確保所有要扣除的點數都已從批次中消耗完畢
-        if ($remainingToDeduct > 0) {
-            throw new RuntimeException('點數批次不足，無法完成兌換');
-        }
+        $this->consumeAvailablePointLotsFIFO($account, $amount);
 
         $balanceAfter = $balanceBefore - $amount;
 
-        // 保持原有的資料庫層級雙重保險
         $updated = $account->where('id', $account->id)
             ->where('balance', '>=', $amount)
             ->update([
@@ -259,7 +234,7 @@ class PointService
             throw new RuntimeException('點數餘額不足，交易失敗');
         }
 
-        return $this->createTransaction(
+        return $this->recordPointTransaction(
             PointTransaction::TYPE_REDEEM,
             $account,
             $amount,
@@ -269,6 +244,34 @@ class PointService
             $reference,
             $createdBy
         );
+    }
+
+    protected function consumeAvailablePointLotsFIFO(PointAccount $account, int $amount): void
+    {
+        $remainingToDeduct = $amount;
+
+        while ($remainingToDeduct > 0) {
+            $lot = $account->pointLots()
+                ->where('remaining_points', '>', 0)
+                ->where(function ($q) {
+                    $q->whereNull('expired_at')
+                        ->orWhere('expired_at', '>', now());
+                })
+                ->orderBy('earned_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->lockForUpdate()
+                ->first();
+
+            if (!$lot) {
+                throw new RuntimeException('點數批次不足，無法完成兌換');
+            }
+
+            $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
+            $lot->update([
+                'remaining_points' => $lot->remaining_points - $deductFromLot,
+            ]);
+            $remainingToDeduct -= $deductFromLot;
+        }
     }
 
     /**
@@ -281,7 +284,7 @@ class PointService
     {
         $this->validatePositiveAmount($amount, '點數必須為正數');
 
-        return $this->executeInLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
             if ($account->balance < $amount) {
                 throw new RuntimeException('點數餘額不足');
             }
@@ -302,7 +305,7 @@ class PointService
             throw new RuntimeException('調整點數不能為0');
         }
 
-        return $this->executeInLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
             $balanceBefore = $account->balance;
             $balanceAfter = $balanceBefore + $amount;
 
@@ -319,12 +322,9 @@ class PointService
                 $updateData['total_redeemed'] = $account->total_redeemed + $absAmount;
             }
 
-            // 負數調整：需要使用FIFO消耗點數批次，使用共用的扣點邏輯
             if ($amount < 0) {
-                // 呼叫共用扣點邏輯，但指定交易類型為ADJUST
                 $remainingToDeduct = $absAmount;
 
-                // FIFO: 按earned_at ASC, id ASC排序，確保完全確定性的消耗順序
                 $lots = $account->pointLots()
                     ->where('remaining_points', '>', 0)
                     ->where(function ($q) {
@@ -336,7 +336,6 @@ class PointService
                     ->lockForUpdate()
                     ->get();
 
-                // 依序消耗每個批次的點數
                 foreach ($lots as $lot) {
                     if ($remainingToDeduct <= 0) {
                         break;
@@ -344,17 +343,15 @@ class PointService
 
                     $deductFromLot = min($lot->remaining_points, $remainingToDeduct);
                     $lot->update([
-                        'remaining_points' => $lot->remaining_points - $deductFromLot
+                        'remaining_points' => $lot->remaining_points - $deductFromLot,
                     ]);
                     $remainingToDeduct -= $deductFromLot;
                 }
 
-                // 必須確保所有要扣除的點數都已從批次中消耗完畢
                 if ($remainingToDeduct > 0) {
                     throw new RuntimeException('點數批次不足，無法完成調整');
                 }
 
-                // 使用where條件確保餘額足夠，同樣的 defense-in-depth 策略
                 $updated = $account->where('id', $account->id)
                     ->where('balance', '>=', $absAmount)
                     ->update($updateData);
@@ -362,12 +359,10 @@ class PointService
                     throw new RuntimeException('點數餘額不足，交易失敗');
                 }
             } else {
-                // 正數調整：更新帳戶餘額
                 $account->update($updateData);
             }
 
-            // 建立交易記錄
-            $transaction = $this->createTransaction(
+            $transaction = $this->recordPointTransaction(
                 PointTransaction::TYPE_ADJUST,
                 $account,
                 $amount,
@@ -378,7 +373,6 @@ class PointService
                 $createdBy
             );
 
-            // 正數調整需要建立新的PointLot
             if ($amount > 0) {
                 PointLot::create([
                     'tenant_id' => $account->tenant_id,
@@ -404,7 +398,7 @@ class PointService
      */
     public function ensurePointAccount(Customer $customer): PointAccount
     {
-        return $this->executeInLock($customer, function (PointAccount $account) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) {
             return $account;
         });
     }
@@ -412,22 +406,28 @@ class PointService
     /**
      * 退款點數（將兌換的點數退回）
      * 
-     * 保留歷史累計，不倒扣 total_redeemed，因為該欄位代表歷史總兌換量
-     * 若提供原始兌換交易作為參考，會自動防止重複退款
+     * Refund restores available balance without erasing historical redemption volume.
+     * total_redeemed 是歷史累計指標，永遠只增不減，保留完整的審計軌跡。
+     * 
+     * 重複退款保護：
+     * - reference_type + reference_id 記錄原始兌換交易
+     * - 在 Customer Lock 保護下檢查是否已存在相同 reference 的退款記錄
+     * - 所有操作在同一 DB transaction 中執行，保證原子性
+     * - 退款會建立新的 PointLot，不恢復原有已消耗批次，保持歷史可追蹤性
      */
     public function refund(Customer $customer, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
     {
         $this->validatePositiveAmount($amount, '退款點數必須為正數');
 
         // 如果參考是原始的 REDEEM 交易，先檢查是否已經退款過以防止重複退款
-        // 這個檢查在executeInLock之外執行，提早失敗；但真正的原子性保證由交易內的檢查提供
+        // 這個檢查在 executeWithCustomerPointStateLock 之外執行，提早失敗；但真正的原子性保證由交易內的檢查提供
         if ($reference instanceof PointTransaction) {
             if ($reference->type !== PointTransaction::TYPE_REDEEM) {
                 throw new RuntimeException('退款只能針對兌換交易');
             }
         }
 
-        return $this->executeInLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
             // 在 Customer Lock 保護下檢查是否已退款，避免同一兌換交易重複退款
             if ($reference instanceof PointTransaction) {
                 // 驗證參考交易與當前帳戶的一致性，禁止跨客戶、跨帳戶、跨租戶退款
@@ -454,14 +454,13 @@ class PointService
             $balanceBefore = $account->balance;
             $balanceAfter = $balanceBefore + $amount;
 
-            // 只更新餘額，保留 total_redeemed 的歷史記錄，不扣回
-            // 這確保 ledger 可以完整追蹤所有發生過的兌換和退款事件
+            // Refund restores available balance without erasing historical redemption volume.
+            // total_redeemed 保持不變，作為歷史累計指標，確保 ledger 可完整追蹤
             $account->update([
                 'balance' => $balanceAfter,
             ]);
 
-            // 建立交易記錄
-            $transaction = $this->createTransaction(
+            $transaction = $this->recordPointTransaction(
                 PointTransaction::TYPE_REFUND,
                 $account,
                 $amount,
@@ -497,7 +496,7 @@ class PointService
      */
     public function expireAllExpiredLots(Customer $customer): array
     {
-        return $this->executeInLock($customer, function (PointAccount $account) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) {
             // 找出該客戶所有需要過期的批次：remaining_points > 0 且 expired_at < now()
             $expiredLots = $account->pointLots()
                 ->where('remaining_points', '>', 0)
@@ -539,8 +538,7 @@ class PointService
                 'balance' => $balanceAfter,
             ]);
 
-            // 建立單一的過期交易記錄
-            $transaction = $this->createTransaction(
+            $transaction = $this->recordPointTransaction(
                 PointTransaction::TYPE_EXPIRE,
                 $account,
                 -$totalExpireAmount,
@@ -564,7 +562,7 @@ class PointService
     {
         $this->validatePositiveAmount($amount, '過期點數必須為正數');
 
-        return $this->executeInLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
             if ($account->balance < $amount) {
                 throw new RuntimeException('點數餘額不足');
             }
@@ -611,7 +609,7 @@ class PointService
                 throw new RuntimeException('點數餘額不足，交易失敗');
             }
 
-            return $this->createTransaction(
+            return $this->recordPointTransaction(
                 PointTransaction::TYPE_EXPIRE,
                 $account,
                 $amount,
@@ -630,7 +628,7 @@ class PointService
      * 所有交易都保證 tenant_id、customer_id、point_account_id 一致性
      * 直接使用已知的 FK 欄位，避免不必要的 lazy loading
      */
-    protected function createTransaction(
+    protected function recordPointTransaction(
         string $type,
         PointAccount $account,
         int $amount,
@@ -641,7 +639,7 @@ class PointService
         ?int $createdBy = null
     ): PointTransaction {
         // 直接使用已驗證的 FK 欄位，不需要額外 lazy loading 客戶資料
-        // getOrCreatePointAccount() 已經保證帳戶與客戶的租戶一致性
+        // lockOrCreatePointAccount() 已經保證帳戶與客戶的租戶一致性
 
         $transaction = new PointTransaction([
             'tenant_id' => $account->tenant_id,

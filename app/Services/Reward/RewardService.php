@@ -32,9 +32,9 @@ class RewardService
     ) {}
 
     /**
-     * 取得客戶+獎勵的鎖定鍵，防止並發重複發放
+     * 取得客戶+獎勵的鎖定鍵，防止同一個 reward grant 被並發重複發放
      */
-    protected function getLockKey(Customer $customer, CampaignReward $campaignReward): string
+    protected function getRewardGrantLockKey(Customer $customer, CampaignReward $campaignReward): string
     {
         return sprintf(
             'reward_grant:tenant:%d:customer:%d:campaign:%d:reward:%d',
@@ -46,9 +46,9 @@ class RewardService
     }
 
     /**
-     * 取得交易+規則的鎖定鍵，防止Campaign規則重複發放
+     * 取得交易+規則的鎖定鍵，防止同一交易的 campaign rule 重複發放
      */
-    protected function getCampaignRuleLockKey(Customer $customer, $transactionId, \App\Models\CampaignRule $campaignRule): string
+    protected function getTransactionRuleRewardLockKey(Customer $customer, $transactionId, \App\Models\CampaignRule $campaignRule): string
     {
         return sprintf(
             'campaign_rule:tenant:%d:customer:%d:transaction:%d:rule:%d',
@@ -60,16 +60,27 @@ class RewardService
     }
 
     /**
-     * 根據消費交易評估並發放符合條件的Campaign規則獎勵
+     * 根據消費交易評估並發放符合條件的 Campaign Rule 獎勵
+     *
+     * Rule-level idempotency / duplicate detection：
+     * 使用 metadata.rule_id + metadata.transaction_id 作為重複檢測鍵
+     *
+     * 設計原因：
+     * - 同一 transaction 可能觸發多個 campaign rules（一個消費可能符合多個活動條件）
+     * - 因此 key 必須包含 rule identity，才能區分同一交易的不同規則獎勵
+     * - transaction identity 用來避免同一交易重複觸發同一 rule，保證冪等性
      */
     public function processTransactionForCampaignRules(Customer $customer, float $spendAmount, array $purchasedProducts, $transactionId = null)
     {
-        // 首先確保交易ID存在，用於冪等性控制
+        return $this->evaluateAndGrantTransactionRewards($customer, $spendAmount, $purchasedProducts, $transactionId);
+    }
+
+    protected function evaluateAndGrantTransactionRewards(Customer $customer, float $spendAmount, array $purchasedProducts, $transactionId = null)
+    {
         if (!$transactionId) {
-            $transactionId = \Illuminate\Support\Str::orderedUuid(); // 使用可靠的UUID作為備用方案
+            $transactionId = \Illuminate\Support\Str::orderedUuid();
         }
 
-        // 取得當前租戶的所有活躍活動
         $activeCampaigns = \App\Models\Campaign::where('tenant_id', $customer->tenant_id)
             ->where('status', \App\Models\Campaign::STATUS_ACTIVE)
             ->where('starts_at', '<=', now())
@@ -81,19 +92,15 @@ class RewardService
         $grantedRewards = [];
 
         foreach ($activeCampaigns as $campaign) {
-            // 取得活動的所有啟用規則
             $rules = \App\Models\CampaignRule::getActiveRulesForCampaign($campaign);
 
             foreach ($rules as $rule) {
-                // 檢查是否符合此規則條件
                 if ($rule->isEligible($spendAmount, $purchasedProducts)) {
-                    // 嘗試獲取鎖，防止重複發放
-                    $lockKey = $this->getCampaignRuleLockKey($customer, $transactionId, $rule);
+                    $lockKey = $this->getTransactionRuleRewardLockKey($customer, $transactionId, $rule);
                     $lock = \Illuminate\Support\Facades\Cache::lock($lockKey, 10);
 
                     try {
-                        $lock->block(5, function () use ($customer, $rule, &$grantedRewards) {
-                            // 檢查是否已經為此交易和規則發放過獎勵
+                        $lock->block(5, function () use ($customer, $rule, &$grantedRewards, $transactionId) {
                             $existingGrant = \App\Models\RewardGrant::where('tenant_id', $customer->tenant_id)
                                 ->where('customer_id', $customer->id)
                                 ->where('campaign_id', $rule->campaign_id)
@@ -102,12 +109,9 @@ class RewardService
                                 ->first();
 
                             if (!$existingGrant) {
-                                // 使用PointService發放點數，遵循現有點數邏輯
                                 if ($rule->points_reward > 0) {
-                                    // 先增加客戶的累計點數，觸發會員等級檢查
                                     $customer->addTotalPointsEarned($rule->points_reward);
 
-                                    // 建立點數交易記錄，使用現有PointService
                                     $pointTransaction = $this->pointService->earn(
                                         $customer,
                                         $rule->points_reward,
@@ -119,7 +123,6 @@ class RewardService
                                         ]
                                     );
 
-                                    // 建立RewardGrant記錄
                                     $rewardGrant = \App\Models\RewardGrant::create([
                                         'tenant_id' => $customer->tenant_id,
                                         'campaign_id' => $rule->campaign_id,
@@ -144,7 +147,6 @@ class RewardService
                             }
                         });
                     } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-                        // 記錄鎖超時但不中斷流程
                         report($e);
                         continue;
                     }
@@ -152,7 +154,6 @@ class RewardService
             }
         }
 
-        // 消費金額也需要加到客戶的累計消費中，觸發會員等級檢查
         $customer->addTotalSpend($spendAmount);
 
         return $grantedRewards;
@@ -176,10 +177,22 @@ class RewardService
 
     /**
      * 對指定客戶發放獎勵
+     * 
+     * RewardGrant lifecycle：
+     * PENDING → GRANTED (success)
+     * PENDING → FAILED (any error path)
+     * 
+     * Preserve an auditable record of attempted reward delivery：
+     * 先在事務外建立 PENDING 狀態的記錄，確保即使後續流程失敗，
+     * 這次發放嘗試仍然會被持久化為 FAILED 狀態，留下完整審計軌跡。
+     * 
+     * Concurrency control：
+     * Lock key includes tenant + customer + campaign + reward
+     * → prevent concurrent duplicate reward grants for the same business scope.
      */
     public function grantRewardToCustomer(Customer $customer, CampaignReward $campaignReward): RewardGrant
     {
-        $lockKey = $this->getLockKey($customer, $campaignReward);
+        $lockKey = $this->getRewardGrantLockKey($customer, $campaignReward);
         $lock = Cache::lock($lockKey, $this->lockTTL);
 
         try {

@@ -8,30 +8,245 @@
 
 **Multi-Tenant Loyalty & Point API Platform** 是一個以 API First 為核心開發的點數交易處理平台。不同於一般的會員系統，本專案專注於解決當多個系統（網站、手機App、POS、電商、CRM）同時存取同一會員點數時的複雜一致性問題。
 
-系統的核心工程挑戰包括：
+---
 
-- 跨租戶的資料安全性與隔離性
-- 高併發下的點數餘額一致性
-- 用戶端重試機制下的冪等性保證
-- 點數異動的完整追蹤與審計能力
-- 多應用實例部署下的分散式一致性
+# 2. 系統真正不能違反的規則（Domain Invariants）
+
+本系統的所有設計都圍繞著保護以下幾個絕對不能被打破的不變量：
+
+## 2.1 Point Balance Invariant
+```text
+PointAccount.balance >= 0
+PointLot.remaining_points >= 0
+```
+這是系統的核心商業不變量，永遠不允許客戶點數餘額為負。
+
+**保證機制**：
+- 應用層事前檢查：redeem/adjust 操作前先驗證 `account->balance >= amount`
+- 資料庫層條件更新：使用 `where('balance', '>=', $amount)->update()` 確保只有餘額足夠才會更新
+- PointLot 強制約束：`remaining_points` 欄位設定為 `unsignedInteger`，MySQL 層級保證不會為負
+- 事務行鎖保護：所有修改都在 `lockForUpdate()` 行鎖保護下進行，避免並發競爭
+
+**驗證**：高併發測試驗證 100 初始餘額在 10 個併發 20 點兌換請求下，最終餘額精確歸零，不會出現負數。
+
+## 2.2 Tenant Isolation Invariant
+```text
+所有資料存取永遠在正確的租戶上下文內
+tenant_id 是安全性與正確性邊界，而非僅是 UI 過濾條件
+```
+跨租戶資料存取是系統最高等級的錯誤，必須在多層級防護下杜絕。
+
+**保證機制**：
+- 全域範圍自動套用：`BelongsToTenant` Trait 自動為所有查詢加上 `tenant_id` 過濾
+- 建立時自動填充：非 Super Admin 建立資料時自動填入當前租戶 ID
+- 外鍵約束：所有表的 `tenant_id` 都有 FOREIGN KEY 約束關聯到 tenants 表
+- 複合唯一索引：所有唯一約束都包含 `tenant_id`，避免跨租戶鍵碰撞
+- Policy 層級檢查：每個資源的授權政策都再次驗證租戶一致性
+
+## 2.3 Point Ledger Atomicity Invariant
+```text
+PointAccount 餘額更新、PointLot 批次消耗、PointTransaction 交易記錄必須在同一事務中完成
+要麼全部成功，要麼全部回滾
+```
+確保餘額、批次、交易記錄三者永遠一致，不會出現狀態分裂。
+
+**實際流程**：
+```text
+DB::transaction()
+    ↓
+lockForUpdate() 鎖定 PointAccount
+    ↓
+更新 account.balance（帶餘額條件檢查）
+    ↓
+依序 lockForUpdate() 鎖定需要消耗的 PointLot
+    ↓
+更新每個 PointLot.remaining_points
+    ↓
+建立 PointTransaction 記錄所有異動
+    ↓
+Commit 交易
+```
+
+## 2.4 Idempotency Invariant
+```text
+同一租戶內的同一個 idempotency_key 永遠只會被處理一次
+UNIQUE (tenant_id, idempotency_key)
+```
+用戶端重試不會導致重複交易，這是處理網路不穩定的核心保證。
+
+**保證機制**：
+- 資料庫唯一約束：`idempotency_keys` 表的 `(tenant_id, idempotency_key)` 複合唯一索引
+- 狀態機制：processing → completed/failed 狀態機確保處理狀態可追蹤
+- Redis 僅作優化：Redis 只用於快取已完成的響應，核心一致性永遠依賴資料庫
+- 降級能力：Redis 不可用時，系統仍能依賴資料庫保證冪等性
 
 ---
 
-# 2. Core Business Problems
+# 3. Architecture Decision Summary
 
-本系統專注解決以下核心商業與技術問題：
+所有架構決策都記錄在 `/docs/adr/`，以下是核心決策的摘要與 trade-off 分析。
 
-1. **多租戶資料隔離**：不同企業租戶的客戶、點數、交易必須完全隔離，避免資料洩漏
-2. **點數餘額一致性**：防止雙重扣點（Double Spend）或超發點數（Overissue）
-3. **併發交易處理**：同一會員同時收到多個交易請求時的序列化作業
-4. **重複請求防護**：用戶端網路超時重試時避免重複執行同一交易
-5. **交易可追溯性**：每一筆點數異動都必須留下不可篡改的審計記錄
-6. **系統擴展性**：隨著客戶與交易數量增長，系統能夠持續穩定運行
+## 3.1 ADR-001: Modular Monolith
+**Problem**：需要選擇一個架構來平衡開發速度、交易一致性與未來擴展性。
+**Decision**：採用 Modular Monolith，所有模組都在同一應用程式內，但保持模組間的責任清晰。
+**Why**：
+  - 點數交易需要強一致性，單體架構下的 ACID 交易能最低成本地保證 `PointAccount/PointLot/PointTransaction` 的原子性
+  - 避免分散式事務的複雜度，在當前系統規模下，單體的成本遠低於微服務
+  - 團隊規模適合單體開發，不需要跨團隊協調多個服務的部署與版本
+**Trade-off**：
+  - 犧牲了獨立擴展某個模組的彈性（如單獨擴展優惠券系統）
+  - 所有模組共享同一個資料庫連接池，資源隔離性較弱
+**Exit Criteria**：當團隊規模增長到超過 10 人、單一應用部署無法應對流量、或需要獨立擴展某些模組時，重新評估架構拆分。
+
+## 3.2 ADR-002: Shared Database Multi-Tenancy
+**Problem**：選擇多租戶架構模式，在隔離性與營運複雜度間取得平衡。
+**Decision**：採用 Shared Database / Shared Tables 模式，所有租戶資料存在同一組表中，透過 `tenant_id` 區分。
+**Why**：
+  - 避免維護多個資料庫或多個綱要的營運複雜度
+  - 跨租戶的統計報表更容易實現
+  - 遷移與結構更新只需執行一次
+**Trade-off**：
+  - 犧牲了租戶級別的資源隔離（無法為大租戶分配獨立硬體）
+  - 需要更嚴格的應用層隔離保證，避免跨租戶資料洩漏
+**Exit Criteria**：當需要為某些客戶提供隔離的資料庫部署、或租戶數量增長到單一資料庫無法承載時，重新評估。
+
+## 3.3 ADR-005: No Microservices Yet
+**Problem**：是否要一開始就拆分為微服務架構。
+**Decision**：目前不拆分微服務，維持 Modular Monolith。
+**Why**：
+  - 點數、優惠券、獎勵系統之間的交易邊界緊密，都需要強一致性
+  - 如果拆分為微服務，將需要處理分散式一致性問題（Saga、Outbox 等），複雜度大幅提升
+  - 當前業務邊界清晰但仍在演進，過早拆分可能導致重構成本高昂
+**Trade-off**：
+  - 所有功能必須一起部署，無法獨立發布
+  - 單一程式碼庫隨著功能增長可能越來越龐大
+**Exit Criteria**：當業務邊界完全穩定、需要獨立擴展某些服務、或團隊足夠大可以維護多個服務時，考慮拆分。
 
 ---
 
-# 3. Architecture Overview
+# 4. Concurrency & Consistency
+
+本系統採用雙層鎖定策略來處理高併發場景下的一致性問題，Redis Lock 與 DB Lock 承擔完全不同的責任：
+
+## 4.1 Redis Lock（應用層優化）
+**負責**：
+- 降低資料庫鎖爭用：讓多應用實例的併發請求先在 Redis 排隊
+- 減少死鎖概率：提早序列化對同一客戶的操作
+- 僅是優化層，不是 correctness boundary
+
+Redis Lock 失敗時（例如 Redis 連接中斷），系統自動降級，依賴下一層的資料庫行鎖繼續保證一致性。
+
+## 4.2 Database Lock（最終正確性保證）
+**負責**：
+- 行級序列化：`lockForUpdate()` 確保同一時間只有一個交易能修改某行
+- 避免 Lost Update：即使 Redis Lock 失效，資料庫層級的鎖依然能防止並發修改
+- 死鎖自動重試：`DB::transaction($callback, 3)` 自動重試因死鎖失敗的交易（最多 3 次）
+
+**完整流程**：
+```text
+Redis Lock (block 最多 10 秒)
+    ↓
+DB::transaction() (最多重試 3 次)
+    ↓
+PointAccount::lockForUpdate()
+    ↓
+依序鎖定需要修改的 PointLot
+    ↓
+執行所有更新
+    ↓
+Commit
+```
+
+---
+
+# 5. Database-First Idempotency
+
+本系統的冪等性策略遵循「資料庫是唯一權威」的核心原則，Redis 僅用於快取優化。
+
+## 5.1 核心保證
+- **唯一約束**：`UNIQUE (tenant_id, idempotency_key)` 資料庫層級保證同一鍵不會被處理兩次
+- **狀態機**：
+  - `processing`：請求正在處理中
+  - `completed`：請求成功完成
+  - `failed`：請求處理失敗，可重試
+- **陳舊清理**：定時任務清理 7 天前的 completed 記錄，以及 5 分鐘以上的 stale processing 記錄
+
+## 5.2 為什麼不只用 Redis？
+- Redis 可能會丟失數據（持久化故障、內存淘汰）
+- Redis 故障轉移期間可能出現一致性窗口
+- 資料庫的唯一約束是最可靠的防線，即使所有上層機制都失效，依然能防止重複執行
+
+---
+
+# 6. Multi-Tenant Isolation 深度解析
+
+租戶隔離是系統的安全性邊界，不是功能需求。本系統實現了多層級的防護：
+
+```text
+應用層級保護
+    ├─ TenantResolver：解析當前請求的租戶上下文
+    ├─ BelongsToTenant Trait：自動為所有模型套用全域租戶範圍
+    ├─ Policies：每個資源的授權檢查再次驗證租戶
+    └─ Middleware：請求進入時的租戶驗證
+          │
+資料庫層級保護
+    ├─ 所有表的 tenant_id 外鍵約束
+    └─ 唯一約束包含 tenant_id 防止跨租戶碰撞
+```
+
+## Super Admin 例外機制
+只有超級管理員可以跳過全域租戶範圍，查看所有租戶的資料。這是唯一的例外，且在程式碼中明確標註，所有其他使用者都必須在租戶上下文內操作。
+
+---
+
+# 7. PointLot FIFO 消費策略
+
+## 7.1 為什麼需要 PointLot？
+- 支援點數過期：不同時間賺取的點數可以有不同的過期時間
+- 精確的會計追蹤：每一筆點數的來源與去向都可追蹤
+- FIFO 保證：先賺取的點數先被消耗，確保過期邏輯正確
+
+## 7.2 FIFO 如何維持？
+所有消耗操作都按照嚴格的順序鎖定與消耗 PointLot：
+```php
+->orderBy('earned_at', 'asc')
+->orderBy('id', 'asc')
+->lockForUpdate()
+```
+先按獲得時間排序，時間相同時按 ID 排序，保證完全確定性的消耗順序。
+
+---
+
+# 8. Failure Analysis 摘要
+
+本系統的設計是在真實的失敗場景中演進而來的，關鍵的設計修正歷程請參考 `/docs/failure-analysis.md`。
+
+## 曾經發生並修復的關鍵問題
+1. **高併發下的雙重扣點**：透過新增 Customer 級別的 Redis Lock + DB 行鎖解決（Git 提交 `cfee6fd`）
+2. **帳戶建立競態條件**：依賴 `(tenant_id, customer_id)` 唯一約束 + 併發捕獲重試邏輯解決
+3. **PointLot 鎖定順序導致死鎖**：統一所有操作的鎖獲得順序（先鎖帳戶，再鎖批次）解決
+4. **Redis 故障導致服務中斷**：新增 Redis 故障降級邏輯，依賴資料庫行鎖繼續運作
+
+---
+
+# 9. Engineering Principles
+
+所有設計都遵循以下工程原則：
+
+```text
+Correctness before optimization          正確性優先於效能
+Database constraints before assumptions  資料庫約束優先於應用假設
+Transaction boundaries before distribution 交易邊界優先於分散式架構
+Tenant isolation before convenience      租戶隔離優先於開發便利性
+Idempotency before retryability          冪等性優先於可重試性
+Observable failure before hidden recovery 可觀察的失敗優先於隱藏的恢復
+```
+
+每一項原則都有對應的程式碼、遷移或測試作為支撐。
+
+---
+
+# 10. Architecture Overview
 
 本專案採用 **Modular Monolith** 架構，在保持交易邊界簡單的同時，建立清晰的模組責任劃分。所有核心業務邏輯集中在 Service Layer，確保不論是 API 請求、後台操作或是排程任務都使用同一套一致性保證機制。
 
@@ -71,7 +286,7 @@
 
 ---
 
-# 4. Architecture Decisions
+# 11. Architecture Decisions
 
 Detailed architecture decisions are documented under `/docs/adr`.
 
@@ -92,7 +307,7 @@ Detailed architecture decisions are documented under `/docs/adr`.
 
 ---
 
-# 5. Core Features
+# 12. Core Features
 
 本系統已實作以下核心業務功能：
 
@@ -123,161 +338,7 @@ Detailed architecture decisions are documented under `/docs/adr`.
 
 ---
 
-# 6. Multi-Tenant Isolation
-
-本系統採用 **Shared Database / Shared Tables** 架構，透過 `tenant_id` 欄位區分所有租戶的資料。這是在當前系統規模下最合適的選擇，避免了維護多資料庫或多綱要的營運複雜性。
-
-## 隔離機制堆疊
-
-```text
-應用層級保護
-    ├─ TenantResolver：解析當前請求的租戶上下文
-    ├─ TenantContext：儲存當前請求的租戶實例
-    ├─ BelongsToTenant Trait：自動為所有模型套用全域租戶範圍
-    ├─ Policies：每個資源的授權檢查
-    └─ Middleware：請求進入時的租戶驗證
-          │
-資料庫層級保護
-    ├─ 所有表的 tenant_id 外鍵約束
-    └─ 唯一約束包含 tenant_id 防止跨租戶碰撞
-```
-
-## 核心風險
-
-> **租戶隔離失敗不只是過濾問題，而是正確性與安全性問題**。缺少租戶範圍的查詢可能導致跨租戶資料洩漏，因此所有層級都必須持續驗證隔離機制的有效性。
-
----
-
-# 7. Transaction Consistency
-
-點數交易的一致性是本系統的核心設計目標。每一筆點數異動都必須保證：
-
-- 餘額與交易明細永遠一致
-- 餘額不會變為負數
-- 同一筆交易不會被重複執行
-- 所有異動都留下審計痕跡
-
-## 交易流程
-
-每筆點數交易都遵循嚴格的流程：
-
-```text
-API Request
-    ↓
-Controller 接收請求
-    ↓
-IdempotencyMiddleware 檢查重複請求
-    ↓
-PointService::executeInLock()
-    ↓
-Redis Lock 取得跨實例鎖 (block 最多 5 秒)
-    ↓
-DB::transaction() 開啟資料庫交易 (最多重試 3 次處理死鎖)
-    ↓
-PointAccount::lockForUpdate() 取得資料庫行鎖
-    ↓
-驗證租戶一致性與餘額合法性
-    ↓
-更新 PointAccount 餘額
-    ↓
-建立 PointTransaction 交易明細
-    ↓
-Commit 交易
-    ↓
-回傳交易結果給 Client
-```
-
----
-
-# 8. Concurrency Control
-
-為了解決並發交易可能導致的 Lost Update 問題，本系統採用多層次的鎖定策略：
-
-## 雙重鎖定架構
-
-```text
-Redis 分散式鎖
-    → 解決：多個應用實例之間的同步問題
-    → 防止：跨實例的併發請求同時操作同一客戶
-
-資料庫行鎖 (SELECT ... FOR UPDATE)
-    → 解決：同一資料庫連接下的併發修改問題
-    → 防止：多個交易同時讀取和修改同一行資料
-
-資料庫交易重試
-    → 解決：短暫死鎖的自動恢復
-    → DB::transaction($callback, 3) 自動重試死鎖的交易
-```
-
-## 經典並發場景
-
-```text
-初始餘額 = 100
-
-請求 A → 兌換 80
-請求 B → 兌換 80
-```
-
-如果沒有適當的鎖定，兩個請求都可能通過餘額檢查，導致最終餘額為 -60。本系統的鎖定機制確保只有一個請求能夠成功，另一個會因餘額不足而失敗。
-
----
-
-# 9. Idempotency
-
-冪等性保證同一個用戶端請求不論執行多少次，都只會對伺服器端狀態產生一次改變。這對於處理網路超時後的用戶端重試至關重要。本系統遵循ADR-006的核心原則：**資料庫為唯一權威，Redis僅作快取**。
-
-## 核心架構
-
-```text
-Client Request (with Idempotency-Key header)
-        ↓
-DatabaseIdempotencyMiddleware
-        ↓
-檢查資料庫中是否存在該(tenant_id, idempotency_key)記錄
-        ├─ 存在且COMPLETED → 直接返回緩存的響應
-        ├─ 存在且PROCESSING → 返回409 Conflict提示處理中
-        └─ 不存在 → 創建PROCESSING狀態記錄，繼續處理請求
-                ↓
-請求處理完成 → 更新記錄為COMPLETED，存儲響應內容
-                ↓
-返回響應給用戶端
-```
-
-## 實作機制
-
-### 資料庫層核心實現
-
-- **唯一約束**：`idempotency_keys`表建立`unique(tenant_id, idempotency_key)`複合唯一索引
-- **行鎖保護**：查詢冪等性記錄時使用`lockForUpdate()`，防止並發場景下的競爭條件
-- **狀態機制**：
-    - `processing`：請求正在處理中
-    - `completed`：請求處理成功完成
-    - `failed`：請求處理失敗，可重試
-- **過期清理**：定時任務清理7天前的completed記錄，以及5分鐘以上的stale processing記錄
-
-### Redis 輔助快取策略
-
-- 僅用於快取completed狀態的響應，降低資料庫查詢壓力
-- 快取TTL設置為24小時，最終一致性依賴資料庫
-- 當Redis不可用時，自動降級為直接查詢資料庫，不影響核心一致性
-- 絕不依賴Redis存儲processing狀態，避免緩存丟失導致重複執行
-
-## 適用的 API 端點
-
-以下寫入操作套用 `idempotent` middleware，重複請求相同 `Idempotency-Key` 時不會重複執行業務操作：
-
-| 端點                                                            | 說明                                                 |
-| --------------------------------------------------------------- | ---------------------------------------------------- |
-| `POST /api/v1/customers/{customer}/point-transactions`          | 點數異動（earn / redeem / adjust / refund / expire） |
-| `POST /api/v1/customers/{customer}/points/redeem`               | POS 點數兌換語意捷徑                                 |
-| `POST /api/v1/customers/{customer}/coupons/claim`               | 優惠券領取                                           |
-| `POST /api/v1/customers/{customer}/coupons/{userCoupon}/redeem` | 優惠券核銷                                           |
-| `POST /api/v1/customers/{customer}/mixed-payment`               | 混合支付（優惠券 + 點數）                            |
-| `POST /api/v1/customers/{customer}/rewards/grant`               | 獎勵發放                                             |
-
----
-
-# 10. API Documentation
+# 13. API Documentation
 
 本系統提供完整的 RESTful API，所有客戶端API都位於 `/api/v1/` 前綴下。完整的互動式API文檔可通過以下地址訪問：
 
