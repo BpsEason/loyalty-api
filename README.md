@@ -159,163 +159,62 @@ Commit
 
 ---
 
-# 4.3 Transactional Outbox & Asynchronous Event Processing
+# Consistency Boundary
 
-為了支援事件驅動架構，本系統實現了完整的 **Transactional Outbox Pattern**，確保領域事件（Domain Event）與業務資料的原子提交，避免事件丟失或狀態不一致。
-
-## 1. Transactional Outbox
-業務資料與 Outbox Event 在同一個 Database Transaction 中寫入：
-```text
-Business Transaction
-        │
-        ├── PointAccount
-        ├── PointTransaction
-        ├── PointLot
-        └── OutboxEvent
-              │
-              └── 同一個 DB Transaction
+```mermaid
+graph TD
+    A[Application Validation] --> B[Redis Lock]
+    B --> C[DB Transaction]
+    C --> D[Row Lock / FOR UPDATE]
+    D --> E[Database Constraint]
+    E --> F[MySQL]
 ```
 
-> 業務資料成功提交時，Outbox Event 同時存在；如果 Transaction rollback，Outbox Event 也會 rollback。
+**責任邊界說明**：
+* **Redis** = concurrency optimization / coordination（僅做併發優化與協調，非一致性源）
+* **MySQL** = correctness boundary（最終正確性邊界）
+* **Database transaction** = atomicity boundary（原子性邊界）
+* **Database constraint** = final integrity guarantee（最終完整性保證）
 
-**原子性保證流程**：
-```text
-DB::transaction()
-    ↓
-lockForUpdate() 鎖定 PointAccount
-    ↓
-更新 account.balance
-    ↓
-更新 PointLot.remaining_points
-    ↓
-建立 PointTransaction 交易記錄
-    ↓
-寫入領域事件到 outbox_events
-    ↓
-Commit 交易
-```
-只有當整個事務成功提交，業務資料更新與事件記錄才會同時生效，從根本上避免了「業務資料更新成功但事件發送失敗」的分布式一致性問題。
+---
 
-## 2. Outbox Dispatcher
-使用 Artisan 命令掃描並處理待處理的 Outbox Event：
-```bash
-php artisan outbox:process-pending
-```
+# 4.3 ADR-013: Transactional Outbox
 
-此命令負責：
-* 找出 `processed_at IS NULL` 的事件
-* 排除已超過重試次數的事件
-* 按 `occurred_at` 排序（先進先出）
-* 每次最多處理 100 筆
-* 將 `ProcessOutboxEvent` Job  dispatch 到專用的 `outbox` queue
+**Purpose**
 
-## 3. Laravel Scheduler 整合
-Outbox Dispatcher 已接入 Laravel Scheduler，自動定期執行：
-```php
-Schedule::command('outbox:process-pending')
-    ->everyMinute()
-    ->withoutOverlapping();
-```
+Prevent lost domain events.
 
-> Dispatcher 不再依賴人工執行，而是由 Scheduler 定期掃描待處理 Outbox Event。
+**Guarantee**
 
-## 4. Redis Queue 設定
-本系統使用 Redis 作為 Queue 連接，確保非同步事件處理的可靠性：
-```env
-QUEUE_CONNECTION=redis
-REDIS_CLIENT=phpredis
-REDIS_HOST=127.0.0.1
-REDIS_PASSWORD=null
-REDIS_PORT=6379
-```
+Business data and `OutboxEvent` are committed atomically in the same database transaction.
 
-Outbox Job 使用獨立的 `outbox` queue，需啟用專屬的 Worker：
-```bash
-php artisan queue:work --queue=outbox
-```
+**Runtime**
 
-Worker 負責真正執行 `ProcessOutboxEvent`，處理每個領域事件的分發。
+Domain/Business Transaction
+→ `outbox_events`
+→ Scheduler
+→ `outbox:process-pending`
+→ `ProcessOutboxEvent`
+→ Redis Queue (`outbox`)
+→ Queue Worker
+→ Domain Event
+→ Listener
 
-## 5. Event Processing Pipeline
-完整的事件處理流程：
-```text
-Application Service
-        │
-        ▼
-Database Transaction
-        │
-        ├── Business Data
-        │
-        └── OutboxEvent
-                │
-                ▼
-        Laravel Scheduler
-                │
-                ▼
-    outbox:process-pending
-                │
-                ▼
-        Redis Queue
-                │
-                ▼
-      ProcessOutboxEvent
-                │
-        ┌───────┴───────┐
-        │               │
-   Redis Lock      IdempotencyKey
-        │               │
-        └───────┬───────┘
-                ▼
-       Domain Event
-                │
-                ▼
-          Event Listener
-```
+**Processing Guarantees**
+* At-least-once processing with idempotency protection
+* OutboxEvent 與業務資料在同一 DB transaction 中提交
+* Scheduler 負責觸發 pending outbox dispatcher
+* Dispatcher 將 `ProcessOutboxEvent` dispatch 到 `outbox` queue
+* Queue Worker 負責真正非同步處理
+* Job 支援 retry / failure tracking
+* Redis lock 用於降低同一事件的並發處理
+* idempotency table 提供處理狀態控制
 
-## 6. 已實作的領域事件
-系統目前支援以下領域事件的 Outbox 處理：
-* `PointEarned`
-* `PointRedeemed`
-* `CouponClaimed`
-* `CouponRedeemed`
-* `RewardGranted`
-* `LogPointEarnedEvent`
-
-## 7. Reliability Mechanisms
-本系統實現了多層可靠性機制確保事件處理的穩定性：
-
-| 機制                   | 用途                      |
-| -------------------- | ----------------------- |
-| Transactional Outbox | 確保業務資料與事件原子寫入           |
-| Redis Queue          | 非同步處理事件                 |
-| Redis Lock           | 避免同一 Outbox Event 被並發處理 |
-| Idempotency Key      | 降低重複處理風險                |
-| Queue Retry          | 處理暫時性失敗                 |
-| `attempts`           | 記錄處理嘗試次數                |
-| `last_error`         | 保存最後一次失敗原因              |
-| `processed_at`       | 記錄事件是否成功處理              |
-
-## 8. At-Least-Once Delivery
-> Outbox Processing 採 At-Least-Once Delivery 思維設計。Queue / Worker 可能因 retry、worker failure 或 process crash 而重新執行，因此事件處理必須具備冪等性。
-
-## 9. Runtime Requirements
-Outbox 功能需要以下服務才能正常運作：
-```text
-Redis
-Laravel Scheduler
-Queue Worker
-```
-
-必須啟用兩個關鍵程序：
-```bash
-# Scheduler：定期將 pending Outbox Event dispatch 到 Queue
-php artisan schedule:work
-
-# Queue Worker：實際執行 ProcessOutboxEvent
-php artisan queue:work --queue=outbox
-```
-
-兩者責任不同，缺一不可。
+**Failure Handling**
+* Queue retry
+* failure tracking
+* idempotency protection
+* processed state
 
 ---
 
@@ -558,7 +457,7 @@ Detailed architecture decisions are documented under `/docs/adr`.
 
 ---
 
-# 11. Failure Scenarios
+# 14. Failure Scenarios
 
 系統針對各種失敗場景都有相應的保護機制，詳細的失敗分析請參考 `/docs/failure-analysis.md`。
 
@@ -577,7 +476,23 @@ Detailed architecture decisions are documented under `/docs/adr`.
 
 ---
 
-# 12. Database Design
+# Core Sources of Truth
+
+| Domain           | Source of Truth           |
+| ---------------- | ------------------------- |
+| Tenant Isolation | `tenant_id`               |
+| Point Balance    | `PointTransaction` Ledger |
+| Point Projection | `PointAccount`            |
+| Point Lot State  | `PointLot`                |
+| Coupon Status    | `UserCoupon`              |
+| Idempotency      | `idempotency_keys`        |
+| Domain Events    | `outbox_events`           |
+
+> **重要說明**：`PointAccount` 是 projection / current-state representation（當前狀態的投影）。真正的點數交易來源是 `PointTransaction` Ledger，所有餘額計算都可以從交易記錄完整重建。
+
+---
+
+# 15. Database Design
 
 ## 實體關係圖
 
@@ -620,7 +535,7 @@ Tenant
 
 ---
 
-# 13. Performance & Query Optimization
+# 16. Performance & Query Optimization
 
 ## Query Performance Verification
 
@@ -645,8 +560,6 @@ EXPLAIN ANALYZE benchmark:
 ### 實作狀態
 
 - ✅ 死鎖處理機制已實作
-- ⚠️ 死鎖重現測試：尚未實作
-- ⚠️ 死鎖效能基準：尚未測量
 
 ## Transaction Isolation
 
@@ -656,7 +569,7 @@ MySQL 的預設交易隔離級別為 **REPEATABLE READ**。本系統依賴 `SELE
 
 ---
 
-# 14. Scalability & Capacity Planning
+# 17. Scalability & Capacity Planning
 
 ## Capacity Planning Target
 
@@ -719,7 +632,16 @@ Queue 延遲
 
 ---
 
-# 15. Testing & Verification
+### Planned Engineering Evidence
+
+* Ledger Rebuild
+* Consistency Verification
+* Load Test Benchmark
+* Deadlock Reproduction / Benchmark
+
+---
+
+# 18. Testing & Verification
 
 系統的測試覆蓋分為以下幾個領域，每個領域的實作狀態：
 
@@ -745,45 +667,9 @@ Queue 延遲
 
 ---
 
-# 16. Domain Invariants
 
-本系統的業務不變量（Domain Invariants）是必須永遠成立的條件，這些都已在程式碼中實作保護：
 
-### 點數餘額不為負
-
-```text
-PointAccount.balance must never be negative
-```
-
-- 程式碼保護：redeem 前的餘額檢查 + 更新時的 SQL 條件 `WHERE balance >= amount`
-
-### 租戶資料隔離
-
-```text
-A tenant-scoped user must not access another tenant's data
-```
-
-- 程式碼保護：全域租戶範圍 + 授權 Policies + 中間件檢查
-
-### 交易記錄完整性
-
-```text
-All point balance changes must have corresponding transaction records
-```
-
-- 程式碼保護：餘額更新與交易記錄建立在同一資料庫交易內
-
-### 不可重複退款
-
-```text
-The same redeem transaction must not be refunded twice
-```
-
-- 程式碼保護：退款時的來源交易檢查與參考關聯
-
----
-
-# 17. Technology Stack
+# 19. Technology Stack
 
 | Category           | Technology                  |
 | ------------------ | --------------------------- |
@@ -800,7 +686,7 @@ The same redeem transaction must not be refunded twice
 
 ---
 
-# 18. API Documentation
+# 20. API Documentation
 
 API 使用 L5-Swagger / OpenAPI 自動生成文件，可透過 `/api/documentation` 存取。
 
@@ -867,7 +753,7 @@ API 使用 L5-Swagger / OpenAPI 自動生成文件，可透過 `/api/documentati
 
 ---
 
-# 19. Admin Panel
+# 21. Admin Panel
 
 後台管理介面使用 Filament 5.8 + Livewire 4.4 建構，主要用於：
 
@@ -880,7 +766,7 @@ API 使用 L5-Swagger / OpenAPI 自動生成文件，可透過 `/api/documentati
 
 核心業務邏輯（點數交易）仍集中在 Service Layer，不論是 API 還是後台操作都使用同一套一致性保證機制。
 
-## 20. Point Ledger & Point Lot
+## 22. Point Ledger & Point Lot
 
 Point Lot 是本系統用於實現精確點數追溯的核心機制，每一批點數都以 Lot 形式管理，確保點數的來源、有效期與消耗順序都可完整追蹤。
 
@@ -916,7 +802,7 @@ PointLot
 
 ---
 
-# 21. Coupon Domain
+# 23. Coupon Domain
 
 優惠券系統由三層核心模型組成，負責從規則定義到實際核銷的完整生命週期管理，完整設計遵循[ADR-008: Coupon System](../docs/adr/ADR-008-coupon-system.md)。
 
@@ -965,7 +851,7 @@ CouponRedemption
 
 ---
 
-# 22. Documentation Structure
+# 24. Documentation Structure
 
 本專案採用分層文件架構，將不同性質的技術文件歸類到對應目錄，保持 README 作為專案入口的簡潔性：
 
@@ -990,7 +876,7 @@ docs/
 
 ---
 
-# 23. Current Status
+# 25. Current Status
 
 ## 系統邊界說明
 
@@ -1019,7 +905,7 @@ docs/
 
 ---
 
-# 24. Development Philosophy
+# 26. Development Philosophy
 
 本專案的開發遵循以下核心原則：
 
@@ -1031,6 +917,4 @@ docs/
 
 ---
 
-# API Documentation
-
-完整的 API 使用文件由 OpenAPI/Swagger 自動生成，請訪問 `/api/documentation` 查看。
+See Swagger UI for the complete API specification.
