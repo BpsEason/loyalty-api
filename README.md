@@ -159,6 +159,36 @@ Commit
 
 ---
 
+# 4.3 Outbox Pattern & Domain Event 原子性保證
+
+為了支援後續的事件驅動架構，本系統實現了 **Outbox Pattern**，確保領域事件（Domain Event）與業務資料的原子提交，避免事件丟失或狀態不一致。
+
+## 核心實作
+- **outbox_events 表**：所有領域事件先寫入資料庫的 outbox_events 表，而非直接發送到消息隊列
+- **事務內原子提交**：在每個業務交易的 DB::transaction() 內，將領域事件寫入 Outbox，確保業務資料與事件記錄要麼全部成功，要麼全部回滾
+- **事件類型**：目前已實作 PointEarned、PointRedeemed、RewardGranted、CouponClaimed、CouponRedeemed 等領域事件
+- **後續處理**：獨立的排程任務會掃描未處理的事件，異步發送到消息隊列，並標記處理狀態
+
+**原子性保證流程**：
+```text
+DB::transaction()
+    ↓
+lockForUpdate() 鎖定 PointAccount
+    ↓
+更新 account.balance
+    ↓
+更新 PointLot.remaining_points
+    ↓
+建立 PointTransaction 交易記錄
+    ↓
+寫入 PointEarned 事件到 outbox_events
+    ↓
+Commit 交易
+```
+只有當整個事務成功提交，業務資料更新與事件記錄才會同時生效，從根本上避免了「業務資料更新成功但事件發送失敗」的分布式一致性問題。
+
+---
+
 # 5. Database-First Idempotency
 
 本系統的冪等性策略遵循「資料庫是唯一權威」的核心原則，Redis 僅用於快取優化。
@@ -280,8 +310,16 @@ Observable failure before hidden recovery 可觀察的失敗優先於隱藏的�
           │
           ▼
        MySQL
+          ├─ outbox_events 儲存待處理的領域事件
+          └─ 業務資料表
           │
      Redis (Cache/Lock)
+          │
+          ▼
+   Event Processor (異步處理Outbox事件)
+          │
+          ▼
+    Message Queue / External Systems
 ```
 
 ---
@@ -304,6 +342,7 @@ Detailed architecture decisions are documented under `/docs/adr`.
 | ADR-010 | Membership Tier System            | ✅ Implemented |
 | ADR-011 | Campaign Rule Engine              | ✅ Implemented |
 | ADR-012 | Audit Logging System              | ✅ Implemented |
+| ADR-013 | Outbox Pattern for Domain Events  | ✅ Implemented |
 
 ---
 

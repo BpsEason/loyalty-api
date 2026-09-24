@@ -2,10 +2,13 @@
 
 namespace App\Services\Point;
 
+use App\Events\PointEarned;
+use App\Events\PointRedeemed;
 use App\Models\Customer;
 use App\Models\PointAccount;
 use App\Models\PointLot;
 use App\Models\PointTransaction;
+use App\Services\Outbox\OutboxService;
 use App\Support\Tenancy\TenantResolver;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -25,7 +28,10 @@ class PointService
      */
     protected int $lockTTL = 20;
 
-    public function __construct(protected TenantResolver $tenantResolver) {}
+    public function __construct(
+        protected TenantResolver $tenantResolver,
+        protected OutboxService $outboxService
+    ) {}
 
     /**
      * 驗證金額為正數
@@ -162,7 +168,7 @@ class PointService
     {
         $this->validatePositiveAmount($amount, '點數必須為正數');
 
-        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy) {
+        return $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy, $customer) {
             $balanceBefore = $account->balance;
             $balanceAfter = $balanceBefore + $amount;
 
@@ -192,6 +198,16 @@ class PointService
                 'expired_at' => null,
                 'origin_transaction_id' => $transaction->id,
             ]);
+
+            // 記錄領域事件到Outbox，與業務事務保持原子性
+            $this->outboxService->recordDomainEvent(new PointEarned(
+                $account->tenant_id,
+                $customer->id,
+                $transaction->id,
+                $amount,
+                $reference,
+                now()->toIso8601String()
+            ));
 
             return $transaction;
         });
@@ -234,7 +250,7 @@ class PointService
             throw new RuntimeException('點數餘額不足，交易失敗');
         }
 
-        return $this->recordPointTransaction(
+        $transaction = $this->recordPointTransaction(
             PointTransaction::TYPE_REDEEM,
             $account,
             $amount,
@@ -244,6 +260,18 @@ class PointService
             $reference,
             $createdBy
         );
+
+        // 記錄領域事件到Outbox，與業務事務保持原子性
+        $this->outboxService->recordDomainEvent(new PointRedeemed(
+            $account->tenant_id,
+            $account->customer_id,
+            $transaction->id,
+            $amount,
+            $reference,
+            now()->toIso8601String()
+        ));
+
+        return $transaction;
     }
 
     protected function consumeAvailablePointLotsFIFO(PointAccount $account, int $amount): void

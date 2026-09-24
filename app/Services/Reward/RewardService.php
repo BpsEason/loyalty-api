@@ -2,10 +2,12 @@
 
 namespace App\Services\Reward;
 
+use App\Events\RewardGranted;
 use App\Models\Campaign;
 use App\Models\CampaignReward;
 use App\Models\Customer;
 use App\Models\RewardGrant;
+use App\Services\Outbox\OutboxService;
 use App\Services\Point\PointService;
 use App\Support\Tenancy\TenantResolver;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -28,7 +30,8 @@ class RewardService
 
     public function __construct(
         protected PointService $pointService,
-        protected TenantResolver $tenantResolver
+        protected TenantResolver $tenantResolver,
+        protected OutboxService $outboxService
     ) {}
 
     /**
@@ -261,6 +264,16 @@ class RewardService
                                 'granted_at' => now(),
                             ]);
                         }
+
+                        // 記錄領域事件到Outbox，與業務事務保持原子性
+                        $this->outboxService->recordDomainEvent(new RewardGranted(
+                            $rewardGrant->tenant_id,
+                            $rewardGrant->customer_id,
+                            $rewardGrant->id,
+                            $rewardGrant->campaign_id,
+                            $campaignReward->reward_type === CampaignReward::TYPE_POINTS ? $campaignReward->points : null,
+                            now()->toIso8601String()
+                        ));
 
                         return $rewardGrant->fresh();
                     });

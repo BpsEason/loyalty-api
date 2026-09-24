@@ -2,10 +2,13 @@
 
 namespace App\Services\Coupon;
 
+use App\Events\CouponClaimed;
+use App\Events\CouponRedeemed;
 use App\Models\CouponTemplate;
 use App\Models\CouponRedemption;
 use App\Models\Customer;
 use App\Models\UserCoupon;
+use App\Services\Outbox\OutboxService;
 use App\Services\Point\PointService;
 use App\Support\Tenancy\TenantResolver;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -204,7 +207,8 @@ class CouponService
 
     public function __construct(
         protected TenantResolver $tenantResolver,
-        protected PointService $pointService
+        protected PointService $pointService,
+        protected OutboxService $outboxService
     ) {}
 
     /**
@@ -307,6 +311,15 @@ class CouponService
                             'expired_at' => $template->expires_at,
                         ]);
 
+                        // 記錄領域事件到Outbox，與業務事務保持原子性
+                        $this->outboxService->recordDomainEvent(new CouponClaimed(
+                            $userCoupon->tenant_id,
+                            $userCoupon->customer_id,
+                            $userCoupon->id,
+                            $userCoupon->coupon_template_id,
+                            now()->toIso8601String()
+                        ));
+
                         return $userCoupon;
                     }, 3);
                 });
@@ -372,6 +385,17 @@ class CouponService
                         'redeemed_at' => now(),
                         'created_by' => $createdBy,
                     ]);
+
+                    // 記錄領域事件到Outbox，與業務事務保持原子性
+                    $this->outboxService->recordDomainEvent(new CouponRedeemed(
+                        $redemption->tenant_id,
+                        $redemption->customer_id,
+                        $redemption->id,
+                        $redemption->user_coupon_id,
+                        $redemption->discount_amount,
+                        $redemption->reference,
+                        now()->toIso8601String()
+                    ));
 
                     return $redemption;
                 }, 3);

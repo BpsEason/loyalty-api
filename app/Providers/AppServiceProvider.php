@@ -23,7 +23,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(\App\Services\Reward\RewardService::class, function ($app) {
             return new \App\Services\Reward\RewardService(
                 $app->make(\App\Services\Point\PointService::class),
-                $app->make(\App\Support\Tenancy\TenantResolver::class)
+                $app->make(\App\Support\Tenancy\TenantResolver::class),
+                $app->make(\App\Services\Outbox\OutboxService::class)
             );
         });
     }
@@ -83,5 +84,14 @@ class AppServiceProvider extends ServiceProvider
                 $event->pivotAttributes[$teamsKey] = $model->tenant_id;
             }
         });
+
+        // 註冊Outbox相關服務
+        $this->app->singleton(\App\Services\Outbox\OutboxService::class);
+
+        // 註冊事件監聽器
+        \Illuminate\Support\Facades\Event::listen(
+            \App\Events\PointEarned::class,
+            \App\Listeners\LogPointEarnedEvent::class
+        );
     }
 }
