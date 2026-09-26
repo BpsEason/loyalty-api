@@ -13,12 +13,6 @@ services:
       - storage:/var/www/storage
       - bootstrap-cache:/var/www/bootstrap/cache
 
-    environment:
-      DB_HOST: host.docker.internal
-      DB_PORT: 3306
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-
     depends_on:
       redis:
         condition: service_healthy
@@ -32,11 +26,14 @@ services:
     restart: unless-stopped
     ports:
       - "8088:80"
+
     volumes:
       - ./:/var/www
-      - ./docker/nginx/conf.d:/etc/nginx/conf.d
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+
     depends_on:
       - app
+
     networks:
       - loyalty-network
 
@@ -47,21 +44,19 @@ services:
     container_name: loyalty-queue-worker
     restart: unless-stopped
     working_dir: /var/www
+
     volumes:
       - ./:/var/www
       - vendor:/var/www/vendor
       - storage:/var/www/storage
       - bootstrap-cache:/var/www/bootstrap/cache
-    environment:
-      DB_HOST: host.docker.internal
-      DB_PORT: 3306
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+
     depends_on:
       redis:
         condition: service_healthy
-    command: >
-      sh -c "php artisan queue:work --tries=3"
+
+    command: php artisan queue:work --tries=3
+
     networks:
       - loyalty-network
 
