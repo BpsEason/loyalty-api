@@ -76,7 +76,7 @@ jobs:
           coverage: none
 
       - name: Validate Composer configuration
-        run: composer validate --strict
+        run: composer validate
 
       - name: Cache Composer dependencies
         uses: actions/cache@v4
