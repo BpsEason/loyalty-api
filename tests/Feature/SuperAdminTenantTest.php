@@ -73,9 +73,13 @@ class SuperAdminTenantTest extends TestCase
         $this->actingAs($tenantAdminA);
 
         $query = UserResource::getEloquentQuery();
-        $sql = strtolower($query->toSql());
 
-        $this->assertStringContainsString('where "users"."tenant_id" = ?', $sql);
+        $this->assertTrue(collect($query->getQuery()->wheres)->contains(
+            fn(array $where): bool => ($where['type'] ?? null) === 'Basic'
+                && ($where['column'] ?? null) === 'users.tenant_id'
+                && ($where['operator'] ?? null) === '='
+                && ($where['value'] ?? null) === $tenantAdminA->tenant_id,
+        ));
         $this->assertContains($tenantAdminA->tenant_id, $query->getBindings());
         $this->assertEqualsCanonicalizing(
             [$tenantAdminA->id, $userA->id],
