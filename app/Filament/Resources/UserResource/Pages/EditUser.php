@@ -20,6 +20,10 @@ class EditUser extends EditRecord
 
     protected function mutateFormDataBeforeSave(array $data): array
     {
+        if (auth()->user()->hasRole('tenant_admin')) {
+            $data['tenant_id'] = auth()->user()->tenant_id;
+        }
+
         if (isset($data['password']) && filled($data['password'])) {
             $data['password'] = Hash::make($data['password']);
         } else {

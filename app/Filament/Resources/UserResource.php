@@ -38,8 +38,12 @@ class UserResource extends Resource
         // 處理必要的eager loading
         $query = static::applyTenantScoping($query, ['tenant']);
 
-        // 記錄Super Admin的查詢，保留原有的日誌
         $user = auth()->user();
+        if ($user && !$user->isSuperAdmin()) {
+            $query->where('users.tenant_id', $user->tenant_id);
+        }
+
+        // 記錄Super Admin的查詢，保留原有的日誌
         if ($user && $user->isSuperAdmin()) {
             logger()->debug('Super Admin User Query', [
                 'sql' => $query->toSql(),
