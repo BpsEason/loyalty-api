@@ -1,4 +1,7 @@
-# Project Specification
+# Loyalty API - AGENTS.md
+## AI Coding Agent Specification & Rules
+
+---
 
 ## 1. Project Identity
 
@@ -33,63 +36,7 @@
 
 ---
 
-# 2. Technology Stack
-
-請以專案目前實際安裝版本為準，不要自行假設版本。
-
-目前主要技術：
-
-- PHP 8.2+
-- Laravel 12
-- Filament 5.8
-- Livewire 4.4
-- MySQL 8
-- Redis
-- JWT Authentication
-- Laravel Queue
-- L5-Swagger / OpenAPI
-
-實際 package constraint：
-
-- PHP: `^8.2`
-- Laravel: `^12.0`
-- Filament: `^5.8`
-- Livewire: `^4.4`
-- tymon/jwt-auth: `^2.3`
-- darkaonline/l5-swagger: `^11.1`
-- bezhansalleh/filament-shield: `4.3.1`
-
-實際安裝版本必須以：
-
-```bash
-composer show
-```
-
-及：
-
-```text
-composer.lock
-```
-
-為準。
-
-不得僅依本文件中的版本號判定目前實際安裝版本。
-
-API：
-
-```text
-/api/v1
-```
-
-Swagger / OpenAPI：
-
-```text
-/api/documentation
-```
-
----
-
-# 3. Source of Truth
+## 2. Source of Truth (Highest Priority)
 
 當 AI Coding Agent 需要判斷目前功能、架構或實作狀態時，優先順序如下：
 
@@ -106,7 +53,7 @@ Configuration / Routes
         ↓
 Architecture / ADR
         ↓
-Project Specification
+Project Specification (本文件)
         ↓
 README / Documentation
         ↓
@@ -135,7 +82,77 @@ Documentation ≠ Code
 
 ---
 
-# 4. Core Architecture
+## 3. No Guessing Rule (Critical)
+
+> **如果不知道，不要猜。**
+
+必須：
+
+```text
+Search Code
+    ↓
+Inspect Configuration
+    ↓
+Inspect Database
+    ↓
+Inspect Tests
+    ↓
+Verify Runtime
+```
+
+禁止自行猜測：
+
+- `tenant_id` 來源
+- Super Admin Tenant 行為
+- Tenant Context
+- Authentication Guard
+- Model Relation
+- API Route
+- API Response
+- Point Business Rule
+- Coupon Business Rule
+- Idempotency behavior
+- Lock order
+- Database Constraint
+- Filament tenancy behavior
+- Permission behavior
+
+如果現有程式碼仍不足以判斷：
+
+> 明確指出缺少的資訊，不得自行創造規則。
+
+---
+
+## 4. Technology Stack
+
+**實際安裝版本 (verified from composer.json):**
+
+- PHP: `^8.2` (constraint)
+- Laravel: `^12.0`
+- Filament: `^5.8`
+- Livewire: `^4.4`
+- tymon/jwt-auth: `^2.3` (JWT Authentication)
+- darkaonline/l5-swagger: `^11.1` (OpenAPI/Swagger)
+- bezhansalleh/filament-shield: `4.3.1` (Filament permissions)
+- MySQL 8
+- Redis
+- Laravel Queue
+
+API Base Path:
+```text
+/api/v1
+```
+
+Swagger / OpenAPI:
+```text
+/api/documentation
+```
+
+實際安裝版本必須以 `composer.lock` 及 `composer show` 為準。
+
+---
+
+## 5. Core Architecture
 
 系統核心架構：
 
@@ -169,25 +186,20 @@ External Systems
 ```
 
 基礎設施：
-
 ```text
-Redis
-Queue
-Events
-Cache
-Locks
+Redis (Lock/Cache)
+Queue (Async processing)
+Events (Domain events)
+Outbox (Reliable event delivery)
 ```
 
-只有在實際需求存在時才加入。
-
-不得為了「看起來 Enterprise」而任意增加技術。
+不得為了「看起來 Enterprise」而任意增加技術：Kafka、RabbitMQ、GraphQL、Kubernetes、Microservices、API Gateway、Event Sourcing、CQRS、Elasticsearch、OAuth Server 等。如果 Laravel + Redis + MySQL + Queue 已能解決問題，優先保持簡單。
 
 ---
 
-# 5. Application Layer Responsibility
+## 6. Application Layer Responsibility
 
-基本責任：
-
+標準請求流程：
 ```text
 Route
   ↓
@@ -208,53 +220,32 @@ Model
 Database
 ```
 
-## Controller
-
-Controller 主要負責：
-
+### Controller
 - 接收 Request
 - 呼叫 Validation
 - 呼叫 Service
 - 回傳 Resource / Response
+- 不應承擔複雜 Business Logic
 
-Controller 不應承擔複雜 Business Logic。
-
-## Form Request
-
-負責：
-
+### Form Request
 - Request Validation
 - Input normalization
 - Authorization（適用時）
 
-## Service
-
-負責：
-
+### Service
 - Business Logic
 - Transaction
 - Domain consistency
 - Cross-model operations
 - Point / Coupon 等核心操作
 
-如果現有功能已經由 Service 處理，新增功能應優先延續現有 Service。
-
-不得因為「看起來更乾淨」而任意新增：
-
-- Repository
-- Action
-- Handler
-- UseCase
-- DTO
-
-除非現有架構已採用該模式，或實際需求明確要求。
+如果現有功能已經由 Service 處理，新增功能應優先延續現有 Service。不得因為「看起來更乾淨」而任意新增 Repository、Action、Handler、UseCase、DTO 等。
 
 ---
 
-# 6. Multi-Tenancy
+## 7. Multi-Tenancy Rules (Critical)
 
 本專案採：
-
 ```text
 Shared Database
 +
@@ -266,335 +257,84 @@ Application-level Tenant Isolation
 ```
 
 核心原則：
-
 > Tenant A 絕對不能讀取、修改或操作 Tenant B 的資料。
 
 任何新增或修改功能時，都必須確認：
-
-1. Tenant 如何解析
-2. Tenant Context 如何建立
-3. Model 是否有 Tenant Scope
+1. Tenant 如何解析 (TenantResolver)
+2. Tenant Context 如何建立 (TenantContext)
+3. Model 是否有 Tenant Scope (BelongsToTenant)
 4. Query 是否可能繞過 Tenant Isolation
-5. Service 是否接受任意 `tenant_id`
+5. Middleware 是否正確設定
 6. Authorization 是否阻止 IDOR
 7. Database Constraint 是否符合 Tenant 邏輯
-
-不得為了方便查詢而移除或弱化 Tenant Isolation。
-
----
-
-# 7. Tenant Context
-
-Tenant Context 的實際來源必須以目前程式碼為準。
-
-不得自行假設：
-
-```php
-auth()->user()->tenant_id
-```
-
-一定存在或一定是目前操作 Tenant。
-
-特別是：
-
-```text
-Super Admin
-```
-
-可以存在：
-
-```text
-tenant_id = null
-```
-
-因此：
+8. Super Admin 行為是否正確
 
 > **Super Admin 不代表目前操作 Tenant。**
 
-當 Super Admin 建立或修改 Tenant-owned 資料時，如果需要指定 Tenant，必須有明確的 Tenant Context 或明確的 Tenant selection。
-
-不得直接寫：
-
+不得自行假設：
 ```php
-$model->tenant_id = auth()->user()->tenant_id;
+auth()->user()->tenant_id
 ```
-
-然後假設所有使用者都一定有 `tenant_id`。
-
-如果目前流程無法判斷應該使用哪個 Tenant：
-
-> 不得猜測，必須先檢查現有 UI、Route、Middleware、Service、Model 與 Tests。
+就是目前操作 Tenant。Tenant Context 永遠必須透過 `app/Support/Tenancy/TenantContext.php` 取得。
 
 ---
 
-# 8. Authentication
+## 8. Authentication Rules
 
-API Authentication 與 Filament Web Authentication 是不同 Context。
+API Authentication 與 Filament Web Authentication 是不同 Context：
 
-API：
+- **API Authentication**: JWT (`tymon/jwt-auth`)
+- **Filament Admin Authentication**: Web Session
 
-```text
-JWT
-```
-
-Filament Admin：
-
-```text
-Web Session
-```
-
-不得因 API 開發而破壞 Filament Authentication。
-
-新增 API 時必須確認：
-
+不得因 API 開發而破壞 Filament Authentication。新增 API 時必須確認：
 - Authentication Middleware
-- Guard
+- Guard (`auth:api`)
 - Token lifecycle
 - Authorization
 - Tenant Context
 
-不要直接假設：
-
-```php
-auth()
-auth('web')
-auth('api')
-```
-
-具有相同行為。
-
 ---
 
-# 9. API Design Philosophy
+## 9. API Rules
 
 API 必須：
+> Stable、Predictable、Integration-friendly、Backward Compatible
 
-> Stable、Predictable、Integration-friendly
-
-API 必須考慮：
-
-- 外部系統 retry
-- Network timeout
-- Duplicate Request
-- Concurrent Request
-- API Versioning
-- Error Handling
-- Rate Limiting
-- Tenant Isolation
-- Backward Compatibility
-
-API URL：
-
-```text
-/api/v1/...
-```
-
-未來可增加：
-
-```text
-/api/v2/...
-```
-
+API URL: `/api/v1/...`
 不得任意破壞既有 v1 Contract。
 
----
-
-# 10. API Responsibility
-
-目前 API v1 的實際 Domain 必須以：
-
-```text
-routes/api.php
-```
-
-與實際 Controller 為準。
-
-目前已知 Domain：
-
+### Current API v1 Domain (verified from routes/api.php)
 - Authentication
 - Customers
-- Points
-- Point Accounts
+- Points / Point Accounts
 - Point Transactions
+- Coupons
+- Rewards
 
-不要因為文件描述而自行建立不存在的 API。
+### API Response Contract
+實際 Response 必須以目前 `App\Support\Api\ApiResponse` 及現有 Controller / Resource 為準。不得為單一 Controller 自行發明新的 Response Format。
 
-如果使用者要求新增 API：
+### Swagger / OpenAPI
+如果 OpenAPI Server 已經設定 `/api/v1`，Endpoint path 不得再次加入 `/api/v1`，避免 `/api/v1/api/v1/...`。修改 Swagger 前必須先執行 `php artisan route:list` 確認。
 
-1. 先確認現有 Route
-2. 確認 Controller
-3. 確認 Service
-4. 確認 Model
-5. 確認 Authorization
-6. 確認 Tenant Isolation
-7. 再決定新增位置
-
----
-
-# 11. API Error Contract
-
-API Response 應維持一致格式。
-
-成功：
-
-```json
-{
-    "success": true,
-    "message": "...",
-    "data": {}
-}
-```
-
-失敗：
-
-```json
-{
-    "success": false,
-    "message": "...",
-    "data": null,
-    "errors": {}
-}
-```
-
-實際 Response 必須以目前：
-
-```text
-App\Support\Api\ApiResponse
-```
-
-及現有 Controller / Resource 為準。
-
-不得為單一 Controller 自行發明新的 Response Format。
+### Rate Limiting
+目前 API 已使用 `throttle:api`，但**目前不是 Tenant-aware**。Tenant-aware Rate Limiting = **Planned**。
 
 ---
 
-# 12. API Documentation
+## 10. Point Domain Rules (Core)
 
-Swagger / OpenAPI：
-
-```text
-/api/documentation
-```
-
-API 文件必須反映實際存在的 Route。
-
-每個重要 API 應盡可能描述：
-
-- HTTP Method
-- Path
-- Authentication
-- Request Parameters
-- Request Body
-- Response
-- Error Response
-- Example
-
-Swagger 文件不得創造不存在的 API。
-
----
-
-# 13. Swagger Version Path
-
-Laravel Route：
-
-```text
-/api/v1/...
-```
-
-如果 OpenAPI Server 已經設定：
-
-```text
-/api/v1
-```
-
-Endpoint path 不得再次加入：
-
-```text
-/api/v1
-```
-
-避免：
-
-```text
-/api/v1/api/v1/...
-```
-
-修改 Swagger 前必須先確認：
-
-```bash
-php artisan route:list
-```
-
-以及實際 OpenAPI Configuration。
-
----
-
-# 14. Point System
-
-點數是本系統核心 Domain。
-
-目前存在的主要操作：
-
+點數是本系統核心 Domain。目前存在的主要操作：
 - Earn
 - Redeem
 - Refund
 - Adjust
 - Expire
 
-新增或修改點數邏輯時，必須注意：
+任何影響 `PointAccount.balance` 的操作，必須遵循目前 `app/Services/Point/PointService.php` 的統一處理方式。不得在其他 Controller、Model Event 或獨立 Service 中自行修改 Balance。
 
-- Point Balance correctness
-- Transaction atomicity
-- Concurrent requests
-- Point Transaction ledger
-- Point Lot
-- Tenant isolation
-- Negative balance prevention
-- Idempotency
-
-任何影響：
-
-```text
-PointAccount.balance
-```
-
-的操作，必須遵循目前 PointService 的統一處理方式。
-
-不得在其他 Controller、Model Event 或獨立 Service 中自行修改 Balance，除非確認現有架構本身就是如此設計。
-
----
-
-# 15. Point Transaction
-
-`PointTransaction` 是點數交易 Ledger。
-
-每一筆影響 Point Balance 的 Business Operation 都應有對應交易紀錄。
-
-目前主要 Transaction Type：
-
-- EARN
-- REDEEM
-- REFUND
-- ADJUST
-- EXPIRE
-
-實際 constants 與 Business Rule 必須以：
-
-```text
-app/Models/PointTransaction.php
-app/Services/Point/PointService.php
-```
-
-為準。
-
-不得自行新增不存在的 Transaction Type。
-
----
-
-# 16. Point Concurrency
-
+### Point Concurrency Architecture
 目前點數核心交易採：
-
 ```text
 Redis Distributed Lock
         ↓
@@ -611,69 +351,24 @@ Create PointTransaction
 Commit
 ```
 
-各層責任不同：
+各層責任：
+- **Redis Lock**: 跨 Process / Instance 同步
+- **DB Transaction**: Atomicity
+- **lockForUpdate()**: Database-level serialization
+- **Database Constraint**: 最終完整性保護
 
-### Redis Lock
+不得任意移除其中任何一層。
 
-避免跨 Process / Instance 的同步競爭。
-
-### Database Transaction
-
-確保資料庫操作 Atomic。
-
-### `lockForUpdate()`
-
-確保同一筆資料的 Database-level serialization。
-
-### Database Constraint
-
-提供最後一道資料一致性防線。
-
-不得任意移除其中任何一層，除非有實際測試證據證明目前方案存在問題。
-
----
-
-# 17. Point Balance Invariant
-
-核心會計不變量：
-
+### Point Balance Invariant (Must Maintain)
 ```text
 SUM(PointLot.remaining_points)
 =
 PointAccount.balance
 ```
+此規則適用於所有會影響 Point Balance 的操作：Earn、Redeem、Refund、Adjust+、Adjust-、Expire。
 
-此規則適用於所有會影響 Point Balance 的操作。
-
-包括：
-
-```text
-Earn
-Redeem
-Refund
-Adjust+
-Adjust-
-Expire
-```
-
-如果修改 PointService：
-
-必須確認上述不變量仍成立。
-
----
-
-# 18. Point Lot / FIFO
-
-本系統使用 Point Lot / FIFO 機制。
-
-FIFO 排序：
-
-```text
-earned_at ASC
-id ASC
-```
-
-主要行為：
+### Point Lot / FIFO
+FIFO 排序：`earned_at ASC, id ASC`
 
 ```text
 Earn
@@ -701,226 +396,79 @@ Expire
 Consume / Expire Point Lot
 ```
 
-Point Lot 是否完整符合所有 Edge Cases：
-
-> 必須以 PointService 與相關 Tests 的實際驗證結果為準。
-
-不得僅因存在：
-
-```text
-PointLot Model
-PointLot Migration
-FIFO Query
-```
-
-就宣稱 Point Lot 完整驗證。
-
 ---
 
-# 19. Idempotency
+## 11. Idempotency Rules
 
-點數變更 API 已建立 Database-backed Idempotency 機制。
+已建立 Database-backed Idempotency 機制：
+- Header: `Idempotency-Key`
+- Database Table: `idempotency_keys`
+- Unique Constraint: `UNIQUE(tenant_id, idempotency_key)`
+- Middleware: `DatabaseIdempotencyMiddleware`
 
-使用：
-
-```text
-Idempotency-Key
+### Currently Applied Routes (verified from routes/api.php)
 ```
-
-Database Unique Constraint：
-
-```text
-UNIQUE(tenant_id, idempotency_key)
-```
-
-目前實際套用範圍：
-
-```text
 POST /customers/{customer}/point-transactions
 POST /customers/{customer}/points/redeem
+POST /customers/{customer}/coupons/claim
+POST /customers/{customer}/coupons/{userCoupon}/redeem
+POST /customers/{customer}/mixed-payment
+POST /customers/{customer}/rewards/grant
 ```
 
-實際保護哪些 Operation：
-
-- Earn
-- Redeem
-- Refund
-- Adjust
-
-必須以現有 Route / Controller / Service 實際行為為準。
-
-不得僅因文件列出某 Operation，就認定該 Operation 已套用 Idempotency。
-
----
-
-# 20. Idempotency Verification
+所有 POST 寫入操作都應優先套用 idempotent middleware。
 
 完整 Idempotency 必須驗證：
-
 - 相同 Tenant + 相同 Key 不重複執行
-- 相同 Key + 不同 Payload 會被拒絕
+- 相同 Key + 不同 Payload 會被拒絕 (409)
 - 不同 Tenant 可以使用相同 Key
 - Completed Request 可以 Replay
-- Duplicate Request 不會建立第二筆 PointTransaction
-- Concurrent Duplicate Request 不會重複扣點或加點
-- Replay HTTP Status 正確
-- Replay Response Contract 正確
-
-如果必要測試尚未通過：
-
-不得標記為完整：
-
-```text
-Implemented
-```
-
-應使用：
-
-```text
-Implemented — Core (Validation In Progress)
-```
-
-或：
-
-```text
-Not Yet Fully Verified
-```
+- Concurrent Duplicate Request 不會重複修改數據
 
 ---
 
-# 21. Event-Driven Architecture
+## 12. Queue / Events / Outbox
 
-Domain Events、Queue、Webhook 等屬於非同步整合能力。
+### Domain Events (Implemented)
+已實現：
+- `PointEarned`
+- `PointRedeemed`
+- `PointsUpdated`
+- `CouponClaimed`
+- `CouponRedeemed`
 
-目前：
+### Queue Infrastructure (Implemented)
+- Laravel Queue
+- Redis Queue Configuration
 
+### Outbox Pattern (Implemented)
+**Outbox 已實作！**
+- Database Table: `outbox_events`
+- Service: `app/Services/Outbox/OutboxService.php`
+- Job: `ProcessOutboxEvent`
+- Command: `outbox:process-pending`
+
+實際流程：
 ```text
-Domain Events
-Queue-based Business Jobs
-Webhook
-```
-
-是否完成必須以實際程式碼與 Tests 為準。
-
-Point Balance 核心 Transaction 不應因非核心 Notification、Webhook 或 Analytics 失敗而 rollback，除非 Business Requirement 明確要求。
-
----
-
-# 22. Outbox Pattern
-
-如果未來需要可靠地將 Domain Event 傳送到外部系統，可評估：
-
-```text
-Database Transaction
+DB Transaction
         ↓
-Outbox Record
+Outbox Record (原子性記錄)
         ↓
-Queue Worker
+Queue Worker 處理
         ↓
 External System
 ```
 
-目前如果沒有實際 Outbox implementation：
-
-> 不得宣稱 Outbox 已完成。
-
----
-
-# 23. External Integration
-
-外部系統主要透過：
-
-```text
-/api/v1
-```
-
-進行整合。
-
-可能的整合系統：
-
-- Website
-- Mobile App
-- POS
-- E-commerce
-- CRM
-- 第三方會員系統
-- 第三方服務
-
-外部整合必須考慮：
-
-### Authentication
-
-如何取得與使用 JWT。
-
-### Tenant Context
-
-如何識別 Tenant。
-
-### Customer
-
-- 建立會員
-- 查詢會員
-- 查詢會員狀態
-
-### Points
-
-- Earn
-- Redeem
-- Refund
-- Adjust
-- 查詢 Balance
-- 查詢 Transactions
-
-### Idempotency
-
-避免 retry 造成重複 Business Operation。
-
-### Webhook
-
-目前如果尚未實作，不得描述成現有功能。
+### Webhook / External Adapters (Planned)
+- Webhook Delivery: Planned
+- CRM Connector: Planned
+- POS Connector: Planned
 
 ---
 
-# 24. Rate Limiting
+## 13. Database Rules
 
-目前 API 已使用：
-
-```text
-throttle:api
-```
-
-作為基礎 API Rate Limiting。
-
-目前限制模型不是 Tenant-aware。
-
-因此目前不能宣稱：
-
-```text
-Tenant-isolated Rate Limiting
-```
-
-未來如果實際流量與業務需求需要，可以評估：
-
-```text
-Tenant-aware Rate Limiting
-```
-
-但不得因為架構文件而提前引入：
-
-- Gateway
-- 第三方 Rate Limit Service
-- Redis-based custom limiter
-
-除非有實際需求與證據。
-
----
-
-# 25. Database Integrity
-
-Database Constraint 是最後一道資料一致性防線。
-
-新增或修改 Schema 時必須檢查：
-
+Database Constraint 是最後一道資料一致性防線。新增或修改 Schema 時必須檢查：
 - Primary Key
 - Foreign Key
 - Unique Constraint
@@ -930,73 +478,266 @@ Database Constraint 是最後一道資料一致性防線。
 - Default
 - Data Type
 
-尤其是 Tenant-scoped 資料：
+> 不得看到 `tenant_id` 就自動將所有 Unique Constraint 改成 `(tenant_id, ...)`。必須依實際 Business Rule 判斷。
 
-> 不得看到 `tenant_id` 就自動將所有 Unique Constraint 改成 `(tenant_id, ...)`。
-
-必須先確認：
-
-1. Business Rule
-2. Application Query
-3. Existing Migration
-4. Tests
-5. Data Integrity Requirement
-
-例如：
-
-```text
-UNIQUE(reference)
-```
-
-是否應改成：
-
-```text
-UNIQUE(tenant_id, reference)
-```
-
-必須依實際 Business Rule 判斷，不得機械式修改。
+Index 必須根據實際 Query Pattern 建立。禁止「未來可能會用到，所以先加 Index」。
 
 ---
 
-# 26. Database Index
+## 14. Testing Rules
 
-Index 必須根據實際 Query Pattern 建立。
+```text
+Test exists
+≠
+Feature fully verified
 
-判斷依據：
+Test passes
+≠
+All edge cases verified
+```
 
-- WHERE
-- JOIN
-- ORDER BY
-- GROUP BY
-- Query frequency
-- Existing index coverage
-- EXPLAIN / EXPLAIN ANALYZE
-
-禁止：
-
-> 「未來可能會用到，所以先加 Index。」
-
-除非有明確 Query Pattern 或效能證據。
-
----
-
-# 27. Testing
-
-任何核心 Business Logic 修改都必須考慮 Tests。
-
-特別是：
-
-### Point
-
+### Required Test Categories
+#### Point System
 - Earn
 - Redeem
 - Refund
 - Adjust
 - Expire
 
-### Concurrency
+#### Multi-Tenant
+- Tenant A 不能操作 Tenant B 的數據
 
-例如：
+#### Idempotency
+- 同一 Idempotency-Key 不得重複執行 Business Operation
+
+#### Concurrency Example
+```text
+Initial balance = 100
+10 concurrent redeem requests
+Each redeem = 20
+```
+預期：
+```text
+Maximum successful redemptions = 5
+Remaining balance = 0
+No negative balance
+No duplicated ledger effects
+```
+
+如果只有 Unit/Feature Test，不得宣稱「Real Multi-process HTTP Concurrency Verified」。
+
+---
+
+## 15. Implementation Status Definitions
+
+### Implemented
+必要 production code 已存在，且相關 Configuration、Schema、Routes、Tests、Runtime verification 已具備足夠證據。
+
+### Implemented — Core (Validation In Progress)
+核心程式碼已存在，但 Edge Cases、完整測試、Concurrency、Runtime Verification 仍未全部完成。
+
+### Not Yet Fully Verified
+核心機制存在，但尚未有足夠證據證明完整正確。
+
+### Planned
+只有架構規劃，尚未實作。
+
+> Class 存在 ≠ Feature 完成。Migration 存在 ≠ Feature 完成。Test File 存在 ≠ Feature 完成。
+
+---
+
+## 16. Current Implementation Status (Verified from Repository)
+
+### Implemented
+- **Multi-Tenancy**: Tenant Model, TenantResolver, TenantContext, BelongsToTenant, Global Tenant Scope, Super Admin bypass
+- **Authentication**: JWT API Auth, Filament Web Session, API Guard, Tenant Middleware
+- **Point System Core**: PointService, PointAccount, PointTransaction, Redis Lock, DB Transaction, lockForUpdate(), Deadlock Retry
+- **Queue Infrastructure**: Laravel Queue, Redis Queue Configuration
+- **API v1**: `/api/v1` 所有核心路由已實作
+- **Swagger / OpenAPI**: L5-Swagger, OpenAPI Attributes, `/api/documentation`
+- **Basic API Rate Limiting**: `throttle:api`
+- **Outbox Pattern**: OutboxService, ProcessOutboxEvent, outbox:process-pending command
+- **Domain Events**: 核心領域事件已實作
+- **Idempotency Core**: DatabaseIdempotencyMiddleware, idempotency_keys table, UNIQUE constraint
+
+### Implemented — Core (Validation In Progress)
+- **Point Lot / FIFO**: 核心操作已存在，但完整會計不變量、所有 Edge Cases 仍需驗證
+- **Database Idempotency**: 核心機制已建立，但完整的併發場景測試仍在進行中
+
+### Not Yet Fully Verified
+- **Real Multi-process / Multi-worker HTTP Concurrency**: Redis Lock + lockForUpdate() 已實作，但真實多進程 HTTP 併發場景未經完整驗證
+
+### Planned
+- **Tenant-aware Rate Limiting**: 目前僅有全域 throttle:api
+- **Webhook Delivery System**: 尚未實作
+- **External System Adapters**: Salesforce, POS Connector, CRM Connector
+- **Advanced Analytics**: 尚未實作
+
+---
+
+## 17. Development Workflow
+
+任何修改前必須遵循：
+```text
+1. Inspect (搜尋程式碼)
+2. Trace (追蹤資料流)
+3. Identify Root Cause (找出根本原因)
+4. Verify Existing Pattern (確認現有模式)
+5. Minimal Fix (最小修改)
+6. Test (執行測試)
+7. Runtime Verify (驗證執行狀態)
+8. Report (回報結果)
+```
+
+不要在 Root Cause 尚未確認前直接修改。
+
+---
+
+## 18. Existing Pattern First
+
+新增程式碼前先搜尋 Repository，優先延續現有 Pattern：
+- Service: 繼續使用現有 Service 模式
+- ApiResponse: 使用 `App\Support\Api\ApiResponse`
+- TenantContext: 使用現有多租戶機制
+- BelongsToTenant: 所有租戶資料都使用此 Trait
+- Policy: 授權使用現有 Policy 模式
+- Form Request: 驗證使用 Form Request
+
+不得自行新增不存在的模式，除非使用者明確要求且現有架構無法解決。
+
+---
+
+## 19. Minimal Change Principle
+
+優先：**最小且正確的修改。**
+
+不要因為發現問題就：
+- 重寫 Service/Controller
+- 更換 Authentication/Tenant Architecture
+- 新增 Repository/DTO/Action 等新模式
+- 引入 Microservices 等複雜架構
+
+除非使用者明確要求，且有實際程式碼/Test/Runtime Evidence 支持。
+
+每次修改都必須：
+```text
+Small
+Focused
+Traceable
+Testable
+```
+
+不得順便進行無關的重構、命名清理、格式重寫、依版本升級等。
+
+---
+
+## 20. AI Modification Constraints
+
+除非使用者明確要求或 Repository Evidence 證明必要，不得自行：
+- 改變 API Contract
+- 改變 Authentication
+- 改變 Tenant Architecture
+- 改變 Database Architecture
+- 新增 Business Rule
+- 新增 API Endpoint
+- 新增 Model Relation
+- 新增 Permission Rule
+- 新增 Service Pattern
+- 新增第三方套件
+- 新增 Infrastructure
+- 修改既有 Tests 來掩蓋 Production Code 問題
+
+---
+
+## 21. Test Modification Rule
+
+當 Production Code 與 Test 不一致時：
+1. 判斷 Production Code 是否正確？
+2. 判斷 Business Requirement 是什麼？
+3. 判斷 Test 是否正確反映 Requirement？
+
+只有確認 Test 錯誤時才修改 Test。不得直接修改 Test 讓它變綠。
+
+---
+
+## 22. Documentation Accuracy
+
+所有文件：README、Swagger、AGENTS.md、SDD、ADR、Code Comments 都必須以實際 Repository Evidence 為基礎。
+
+如果文件與程式碼不一致，必須先檢查驗證，再更新文件。不得猜測哪一個正確。
+
+---
+
+## 23. Performance Claims
+
+禁止自行宣稱：
+```text
+Production Ready
+High Performance
+Enterprise Scale
+Handles X requests/sec
+Supports X million records
+```
+
+除非存在實際的 Benchmark、Load Test、EXPLAIN ANALYZE、Concurrency Test、Runtime Metrics。沒有測量 = Not Measured。
+
+---
+
+## 24. Project Direction (Long-term, Not Current Implementation)
+
+本專案長期方向是建立一套可以被不同產品、平台與第三方服務重複整合的 Multi-Tenant Loyalty / Point API Platform。
+
+```text
+Website
+      │
+Mobile App
+      │
+POS
+      │
+E-commerce
+      │
+CRM
+      │
+      ▼
+┌──────────────────────┐
+│   Loyalty API         │
+│      /api/v1          │
+├──────────────────────┤
+│ Authentication        │
+│ Tenant Context        │
+│ Customers             │
+│ Points                │
+│ Transactions          │
+│ Integration           │
+└──────────┬───────────┘
+           │
+     ┌─────┼─────┐
+     ▼     ▼     ▼
+   MySQL Redis  Queue
+```
+
+所有「長期方向」均不得被 AI 視為 Current Implementation，除非 Repository Evidence 已證明已完成。
+
+---
+
+## 25. Final Rules (Most Important)
+
+```text
+Actual Code
+    ↓
+Actual Tests
+    ↓
+Actual Runtime Behavior
+    ↓
+Documentation
+```
+
+> **先確認，再修改。**
+> **先找現有 Pattern，再新增程式碼。**
+> **能小改就不要重構。**
+> **能使用現有架構就不要增加新架構。**
+> **不知道就搜尋，不要猜。**
+> **沒有證據，就不要宣稱已完成。**
 
 ```text
 Initial balance = 100

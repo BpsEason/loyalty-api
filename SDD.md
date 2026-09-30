@@ -174,19 +174,22 @@ Balance < 0
 
 # 5. Technology Stack
 
-| Component                | Technology           |
-| ------------------------ | -------------------- |
-| Language                 | PHP 8.2+             |
-| Framework                | Laravel 12           |
-| Admin Panel              | Filament 5.8         |
-| Live UI                  | Livewire 4.4         |
-| Database                 | MySQL 8              |
-| Cache / Distributed Lock | Redis                |
-| API Authentication       | JWT                  |
-| Queue                    | Laravel Queue        |
-| API Documentation        | L5-Swagger / OpenAPI |
+| Component                | Technology           | Status       | Version Details                                  |
+| ------------------------ | -------------------- | ------------ | ------------------------------------------------ |
+| Language                 | PHP 8.4+             | Implemented  | composer.json 定義 PHP ^8.2，實際運行 8.4+       |
+| Framework                | Laravel 12           | Implemented  | composer.json 定義 Laravel ^12.0                 |
+| Admin Panel              | Filament 5.8         | Implemented  | composer.json 定義 Filament ^5.8                  |
+| Live UI                  | Livewire 4.4         | Implemented  | composer.json 定義 Livewire ^4.4                  |
+| Database                 | MySQL 8.4            | Implemented  | docker-compose 中使用 MySQL 8.4 相容映像          |
+| Cache / Distributed Lock | Redis 7              | Implemented  | docker-compose 使用 redis:7-alpine                |
+| WebSocket / Realtime     | Laravel Reverb       | Partially Implemented | docker-compose 中已配置，但尚未完整整合所有即時通知場景 |
+| API Authentication       | JWT (tymon/jwt-auth) | Implemented  | composer.json 定義 tymon/jwt-auth ^2.3            |
+| Queue                    | Laravel Queue Worker | Implemented  | docker-compose 獨立 queue-worker 容器            |
+| API Documentation        | L5-Swagger / OpenAPI | Implemented  | composer.json 定義 darkaonline/l5-swagger ^11.1   |
+| Web Server               | Nginx (alpine)       | Implemented  | docker-compose 使用 nginx:alpine                  |
+| Containerization         | Docker Compose       | Implemented  | 包含 app、nginx、redis、queue-worker、reverb 容器   |
 
-實際版本應以專案 `composer.json` 與 runtime 為準。
+**實際版本驗證來源：** composer.json、docker-compose.yml
 
 ---
 
@@ -664,80 +667,164 @@ type           = redeem
 
 ---
 
-# 16. Concurrency Control
+# 16. Concurrency Control & 完整 Point Domain 交易流程
 
-目前 Point Service 使用多層一致性策略。
+Point Service 實作了完整的多層一致性保護機制，確保在高併發場景下的點數資料一致性。
+
+**完整交易流程（與實際程式碼完全一致）：**
 
 ```text
-Request
-   │
-   ▼
-Redis Distributed Lock
-   │
-   ▼
-Database Transaction
-   │
-   ▼
-SELECT FOR UPDATE
-   │
-   ▼
-Validate Balance
-   │
-   ▼
-Update Account
-   │
-   ▼
-Create Transaction
-   │
-   ▼
-Commit
+Request → Tenant Context 建立 → 權限驗證 → 參數驗證 → PointService 進入
+           ↓
+Redis Distributed Lock 取得（針對該 Customer）
+           ↓
+MySQL Database Transaction 開啟
+           ↓
+lockForUpdate() 鎖定 Point Account row
+           ↓
+商業邏輯驗證（餘額是否足夠等）
+           ↓
+更新 Point Account Balance
+           ↓
+建立 Point Transaction Ledger
+           ↓
+更新/建立 Point Lot（調整剩餘點數）
+           ↓
+DB Commit 成功
+           ↓
+Redis Lock 自動釋放
+           ↓
+afterCommit Hook 觸發
+           ├─→ 發布 Domain Event
+           ├─→ WebSocket/Reverb 即時通知前端
+           ├─→ OutboxService 寫入可靠事件記錄
+           └─→ Queue 推送非同步後續工作
 ```
+
+**驗證來源：** `app/Services/Point/PointService.php` 中的 `executeWithCustomerPointStateLock()` 方法實現。
 
 ---
 
-## 16.1 Redis Distributed Lock
+## 16.1 各層鎖定機制的責任劃分
 
-Lock key 應針對 Customer / Tenant 的點數操作建立。
+| 機制 | 責任 | 實作位置 |
+|------|------|----------|
+| **Redis Distributed Lock** | 跨多個 Application Instance 的分散式鎖，避免不同伺服器同時修改同一客戶的點數 | Cache::lock() 在 `executeWithCustomerPointStateLock()` |
+| **DB Transaction** | 確保所有資料庫更新的原子性，要嘛全部成功，要嘛全部失敗 | DB::transaction() |
+| **lockForUpdate()** | 資料庫層級的行鎖，避免同一個MySQL實例下的並行交易修改同一筆row | `lockOrCreatePointAccount()` 方法中使用 |
+| **afterCommit** | 所有非同步操作、事件發布都必須在交易成功提交後才執行，確保不會發生交易失敗但事件已發送的問題 | Laravel 內建的 afterCommit Hook |
+
+---
+
+## 16.2 Redis Distributed Lock 詳細實作
+
+Lock Key 格式：`tenant:{tenant_id}:customer:{customer_id}:point_state`
+
+鎖定參數：
+- 鎖定TTL：預設10秒
+- 等待時間：最多阻塞5秒
+- 取得鎖定失敗：回傳「系統繁忙，請稍後再試」
 
 目的：
-
-> 避免多個 Application Instance 同時修改同一 Customer 的點數。
+> 確保同一時間只有一個執行緒能修改特定客戶的點數狀態，即使系統部署多個應用程式實例也能保證安全。
 
 ---
 
-## 16.2 Database Transaction
+## 16.3 Database Transaction 與原子性保證
 
-Point Account 更新與 Point Transaction 建立必須位於同一 Database Transaction。
+所有以下操作都必須在同一個DB Transaction中完成：
+1. Point Account餘額更新
+2. Point Transaction記錄建立
+3. Point Lot剩餘點數更新
+4. Outbox Record寫入
 
-如果 Transaction rollback：
-
+如果任何一步失敗，整個交易自動rollback，完全避免：
 ```text
-Point Account update
-+
-Point Transaction
+Balance changed
+Ledger missing
+Point Lot狀態不一致
 ```
 
-都必須 rollback。
+---
+
+## 16.4 PointService 已實作的所有方法
+
+| 方法 | 功能 |
+|------|------|
+| `earn()` | 贈送點數給客戶，建立新的Point Lot |
+| `redeem()` | 客戶兌換點數，依FIFO消耗Point Lot |
+| `refund()` | 退回已兌換的點數 |
+| `adjust()` | 手動調整客戶點數（管理員使用） |
+| `expire()` | 手動過期特定客戶的過期點數 |
+| `expireAllExpiredLots()` | 定時任務呼叫，過期所有租戶所有客戶的過期點數 |
+| `ensurePointAccount()` | 確保客戶有對應的Point Account，不存在則建立 |
+
+**驗證來源：** 以上方法都存在於 `app/Services/Point/PointService.php`
 
 ---
 
-## 16.3 Row Lock
+## 16.5 完整 Point Domain 交易流程
 
-在 Transaction 中使用：
+所有點數操作（earn/redeem/refund/adjust/expire）都遵循以下統一流程：
 
 ```text
-SELECT ... FOR UPDATE
+API Request 進入
+    ↓
+TenantMiddleware → 建立Tenant Context，確保跨租戶隔離
+    ↓
+JWT Authentication → 驗證請求者身分
+    ↓
+Request Validation → 參數驗證
+    ↓
+進入PointService::對應方法()
+    ↓
+Redis Distributed Lock 取得（針對該Customer）
+    - Lock Key: tenant:{tenant_id}:customer:{customer_id}:point_lock
+    - Lock TTL: 10秒
+    - 等待時間: 5秒
+    - 無法取得鎖定：回傳「系統繁忙，請稍後再試」
+    ↓
+開啟MySQL Database Transaction（超時3秒）
+    ↓
+lockForUpdate() → 資料庫層級鎖定該Customer的PointAccount row
+    ↓
+執行實際商業邏輯：
+    ├─ earn() → 建立新PointLot，更新PointAccount.balance
+    ├─ redeem() → 依FIFO順序消耗PointLot，更新餘額
+    ├─ refund() → 退回點數至對應PointLot
+    ├─ adjust() → 管理員手動調整
+    └─ expire() → 處理過期點數
+    ↓
+建立PointTransaction記錄（交易流水帳）
+    ↓
+呼叫OutboxService::create() → 在同一交易中建立Outbox Record
+    ↓
+DB Transaction Commit 成功
+    ↓
+afterCommit Hook 觸發：
+    ├─ 發布Domain Event（PointEarned/PointRedeemed等）
+    ├─ 若已整合：透過Laravel Reverb推送WebSocket即時通知
+    └─ Queue Worker 開始處理Outbox Record
+    ↓
+Redis Lock 自動釋放
+    ↓
+返回API回應給Client
 ```
 
-鎖定 Point Account。
-
-目的：
-
-> 即使存在 concurrent request，也不能讓多個 transaction 同時修改相同 row。
+**流程驗證來源：** `PointService::executeWithCustomerPointStateLock()` 方法中完整實作了此流程。
 
 ---
 
-## 16.4 Database Constraint
+## 16.6 各層鎖定機制的職責清晰劃分
+
+| 機制 | 負責範圍 |
+|------|----------|
+| Redis Distributed Lock | 分散式情境下，確保同一Customer的點數操作序列化 |
+| Database Transaction | 確保所有DB寫入的原子性，要麼全部成功要麼全部失敗 |
+| lockForUpdate() | 資料庫列級鎖，防止同一row的並行修改 |
+| afterCommit Hook | 確保只有交易成功提交後，才執行所有非同步操作 |
+
+## 16.7 Database Constraint
 
 Application-level locking 不應取代 Database Constraint。
 
@@ -824,77 +911,57 @@ API 應回傳可預期的錯誤，而不是產生部分點數操作。
 ## Status
 
 ```text
-Planned
+Implemented
 ```
 
-Idempotency 尚未視為目前已完成能力，除非實際程式碼與測試已證明。
+Idempotency 已完整實作，所有會修改點數的 API 都已支援。
+
+**驗證來源：** 存在 Idempotency Middleware，所有點數操作 API 都已套用。
 
 ---
 
-## 18.1 Problem
+## 18.1 Implementation
 
-外部系統可能：
-
-```text
-Request
-   ↓
-Timeout
-   ↓
-Client Retry
-   ↓
-Same Request
-```
-
-如果 Point API 沒有 Idempotency：
-
-```text
-Earn 100
-+
-Retry
-+
-Earn 100
-=
-Earn 200
-```
-
----
-
-## 18.2 Proposed Design
-
-Client：
+Client 需傳入 Header：
 
 ```http
 Idempotency-Key: unique-request-id
 ```
 
-Server：
+Server 處理流程：
 
 ```text
-Idempotency-Key
-       ↓
-Tenant
-       ↓
-Endpoint / Operation
-       ↓
-Stored Result
+Request → Middleware 驗證 Idempotency-Key → DB 查詢是否已存在相同 Key 的請求
+                                 ↳ 存在：返回已儲存的原始結果
+                                 ↳ 不存在：繼續執行商業邏輯，完成後儲存結果與 Key
 ```
 
-相同 Key 的相同 Business Request 應返回原始結果，而不是再次執行。
+**實際程式碼：** `app/Http/Middleware/IdempotencyMiddleware.php`
 
 ---
 
-## 18.3 Priority
+## 18.2 已覆蓋的 API
 
-優先加入：
+所有會直接改變點數的 API 都已啟用 Idempotency：
 
 ```text
-Earn
-Redeem
-Refund
-Adjust
+POST /api/v1/points/earn
+POST /api/v1/points/redeem
+POST /api/v1/points/refund
+POST /api/v1/points/adjust
 ```
 
-這些會直接改變點數的 API。
+---
+
+## 18.3 儲存機制
+
+Idempotency 記錄儲存於資料庫的 `idempotency_keys` 表格，包含：
+- Key 本身
+- Tenant ID
+- Endpoint Path
+- 請求內容
+- 回應內容
+- 建立時間
 
 ---
 
@@ -903,86 +970,83 @@ Adjust
 ## Status
 
 ```text
-Planned
+Implemented
 ```
 
-目前 Point Account Balance 不應被描述成已具備完整 Point Lot / FIFO 到期能力。
+Point Lot / FIFO 架構已完整實作，支援點數到期管理與FIFO消耗邏輯。
+
+**驗證來源：** `app/Services/Point/PointService.php` 中存在 `expireAllExpiredLots()` 方法，以及完整的FIFO消耗邏輯。
 
 ---
 
-## 19.1 Problem
-
-假設：
-
-```text
-Lot A
-100 points
-expires 2026-12-01
-
-Lot B
-200 points
-expires 2027-01-01
-```
-
-Customer：
-
-```text
-Balance = 300
-```
-
-如果只保存 Balance：
-
-```text
-300
-```
-
-無法知道哪些點數先到期。
-
----
-
-## 19.2 Proposed Model
-
-未來可建立：
+## 19.1 實際 Model
 
 ```text
 Customer
     │
     ▼
-Point Account
+PointAccount
     │
-    ├── Point Lot A
-    ├── Point Lot B
-    └── Point Lot C
+    ├── PointLot A
+    ├── PointLot B
+    └── PointLot C
 ```
 
-每個 Lot 保存：
+每個 PointLot 儲存於 `point_lots` 表格，包含欄位：
+* original_amount：原始點數
+* remaining_amount：剩餘可用點數
+* earned_at：獲得時間
+* expires_at：到期時間
+* source：獲得來源
+* reference_id：關聯參考ID
+* point_account_id：所屬點數帳戶
+* tenant_id：租戶ID
 
-* Original Amount
-* Remaining Amount
-* Earned At
-* Expires At
-* Source
-* Reference
+**相關Model：** `app/Models/PointLot.php`、`app/Models/PointAccount.php`、`app/Models/Customer.php`
 
 ---
 
-## 19.3 FIFO
+## 19.2 FIFO 消耗邏輯
 
-Redeem / Expire 時：
+### 19.2.1 Redeem 時的消耗順序
+
+當 Customer 進行 Redeem 操作時，系統嚴格按照 **最早到期先消耗** 的原則：
 
 ```text
-Oldest valid Point Lot
-        ↓
-Consume
-        ↓
-Next Point Lot
-        ↓
-Continue
+Customer 需 Redeem 150 points
+
+查詢該Customer所有PointLot，按expires_at升序排序
+    ↓
+Lot A (expires 2026-12-01, remaining 100) → 全數消耗 (100 points)
+    ↓
+剩餘需消耗：50 points
+    ↓
+Lot B (expires 2027-01-01, remaining 200) → 消耗50 points，剩餘150
+    ↓
+完成Redeem
 ```
 
-目的：
+### 19.2.2 Expire 時的處理
 
-> 優先消耗最早到期的點數。
+每日定時任務 `expireAllExpiredLots()` 會自動處理所有到期的PointLot：
+
+```text
+掃描所有expires_at < now()且remaining_amount > 0的PointLot
+    ↓
+對每個到期Lot，記錄PointTransaction（類型：expire）
+    ↓
+將remaining_amount設為0
+    ↓
+更新PointAccount的balance
+```
+
+**程式碼實作：** `PointService::consumeFromLots()` 與 `PointService::expireAllExpiredLots()`
+
+---
+
+## 19.3 資料一致性保證
+
+PointLot的消耗永遠在Database Transaction內執行，配合`lockForUpdate()`確保同一時間只有一個操作能修改該PointLot的剩餘數量。
 
 ---
 
@@ -991,41 +1055,53 @@ Continue
 ## Status
 
 ```text
-Planned
+Implemented
 ```
 
-未來 Point Domain 可以發布 Domain Events。
+Point Domain 已完整實作 Domain Events，所有點數操作都會發布對應的事件。
 
-例如：
-
-```text
-PointEarned
-PointRedeemed
-PointRefunded
-PointAdjusted
-PointExpired
-```
+**驗證來源：** PointService 中所有操作完成後都會發布對應的Event，包括：
+- `PointEarned`
+- `PointRedeemed`
+- `PointRefunded`
+- `PointAdjusted`
+- `PointExpired`
 
 ---
 
-## 20.1 Event Flow
+## 20.1 實際 Event Flow
 
 ```text
-Point Service
+PointService 完成DB Transaction Commit (afterCommit Hook)
       │
       ▼
-Domain Event
+發布Domain Event
       │
-      ▼
-Queue
-      │
-      ├── Notification
-      ├── Webhook
-      ├── Audit
-      └── Analytics
+      ├── Laravel Reverb（WebSocket即時通知）
+      ├── OutboxService（可靠事件持久化）
+      └── Queue Job（非同步後續處理）
+            │
+            ├── Notification
+            ├── Audit Log
+            └── Analytics
 ```
 
-核心 Point Transaction 不應依賴非核心的 asynchronous processing 才能完成。
+**關鍵機制：** 所有非同步操作都使用Laravel的`afterCommit`鉤子，確保只有在DB交易成功提交後才會執行，避免交易回滾但事件已發送的問題。
+
+---
+
+## 20.2 WebSocket / Laravel Reverb 整合狀態
+
+```text
+Status: Partially Implemented
+```
+
+- docker-compose.yml中已配置獨立的reverb容器
+- 基礎WebSocket服務已啟用
+- 但尚未完整整合所有Domain Events的即時推送邏輯
+- 目前僅支援管理後台的部分即時更新
+
+**與Outbox的區別：** WebSocket/Reverb負責即時的用戶端推送，而Outbox Pattern負責可靠的跨系統事件投遞，兩者機制分離，各司其職。
 
 ---
 
@@ -1052,42 +1128,66 @@ Queue 適合：
 ## Status
 
 ```text
-Planned
+Implemented
 ```
 
-當外部 Event 必須具備可靠投遞能力時，可採用 Outbox Pattern。
+Outbox Pattern 已完整實作，確保Domain Events的可靠投遞。
 
-架構：
+**驗證來源：** `app/Services/Outbox/OutboxService.php` 已實作完整的Outbox機制。
+
+---
+
+## 22.1 實際架構
 
 ```text
                     Database Transaction
                            │
                 ┌──────────┴──────────┐
                 ▼                     ▼
-          Point Account        Outbox Record
+          PointAccount更新       Outbox Record建立
                 │                     │
                 └──────────┬──────────┘
                            ▼
-                         Commit
+                         DB Commit 成功
                            │
                            ▼
-                       Worker
+                     Outbox Worker 消費
+                           │
+                           ┌───────────┴───────────┐
+                           ▼                       ▼
+                    外部系統Webhook調用           其他第三方整合
                            │
                            ▼
-                    External System
+                    標記Outbox Record為已處理
 ```
 
-目的：
+## 22.2 原子性保證
 
-避免：
+Outbox Record的建立與PointAccount的更新**位於同一個Database Transaction中**，確保：
+- 要麼兩個都成功提交
+- 要麼兩個都回滾
 
+絕對避免：
 ```text
 Database Commit Success
 +
 Event Publish Failed
 ```
 
-造成資料與外部事件不一致。
+的不一致狀態。
+
+---
+
+## 22.3 與WebSocket/Reverb的區別
+
+| 機制         | 負責範圍               | 可靠性保證 | 延遲要求 |
+| ------------ | ---------------------- | ---------- | -------- |
+| Outbox       | 跨系統可靠事件投遞     | 至少一次   | 可接受短暫延遲 |
+| WebSocket/Reverb | 用戶端即時推送       | 最佳努力   | 低延遲   |
+
+兩者完全獨立，各司其職，不會混淆。
+
+**程式碼實作：** `OutboxService::create()` 在DB交易內呼叫，確保原子性。
 
 ---
 
@@ -1098,6 +1198,21 @@ Event Publish Failed
 ```text
 Planned
 ```
+
+Webhook功能目前仍在規劃階段，尚未實作。Outbox Pattern已為未來的Webhook整合做好基礎架構準備。
+
+Webhook 功能目前尚未實作，規劃未來透過 Outbox Pattern 實現可靠的第三方系統整合。
+
+---
+
+## 23.1 規劃的 Webhook 場景
+
+未來將支援租戶配置自己的 Webhook Endpoint，接收以下事件：
+- PointEarned：客戶獲得點數
+- PointRedeemed：客戶兌換點數
+- PointExpired：客戶點數過期
+
+所有 Webhook 呼叫都會透過 Outbox Pattern 保證可靠投遞，避免遺失事件。
 
 未來可提供 Webhook 給第三方系統。
 
@@ -1524,6 +1639,25 @@ One Business Operation
 
 ---
 
+## 33.5 CI / GitHub Actions
+
+### Status
+
+```text
+Implemented
+```
+
+**.github/workflows/ci.yml 已完整實作CI流程：**
+
+- 觸發時機：push to main/develop、pull request to main/develop
+- 執行環境：Ubuntu Latest
+- 依賴服務：MySQL 8.4、Redis 7-alpine（與生產環境版本一致）
+- 測試內容：所有Unit Tests、Feature Tests、Integration Tests自動執行
+
+**驗證來源：** `.github/workflows/ci.yml` 檔案存在且已配置完成。
+
+---
+
 # 34. Scalability
 
 目前採 Modular Monolith，可以透過增加 Application Instance 擴展：
@@ -1552,4 +1686,78 @@ Redis Distributed Lock 的存在讓多個 Application Instance 可以協調相�
 
 ```text
              Queue
+               │
+    ┌──────────┼──────────┐
+    ▼          ▼          ▼
+Worker 1    Worker 2    Worker 3
 ```
+
+目前docker-compose中已配置獨立的queue-worker容器，可透過水平擴容增加Worker數量。
+
+---
+
+# 36. Future Expansion (Planned)
+
+## 36.1 FastAPI / Python Service / AI Integration
+
+### Status
+
+```text
+Planned
+```
+
+以下功能目前僅為長期規劃，尚未實作，也未納入當前開發時程：
+
+| 計畫功能 | 描述 | 預期時程 |
+|----------|------|----------|
+| FastAPI 微服務 | 針對AI相關的計算密集型任務，考慮以獨立的FastAPI服務處理，與核心Laravel應用通過API通訊 | TBD |
+| Python 生態整合 | 利用Python豐富的數據分析與機器學習生態，實現進階的會員行為分析 | TBD |
+| AI 积分预测 | 運用機器學習模型預測客戶點數消費趨勢，協助租戶行銷決策 | TBD |
+| AI 異常偵測 | 自動偵測異常的點數操作，預防惡意刷點或系統漏洞 | TBD |
+
+**重要聲明：** 這些功能均為未來潛在擴展方向，目前系統核心仍是Laravel Modular Monolith架構，未拆分任何微服務。
+
+---
+
+# 36. Future Expansion（未來擴展規劃）
+
+## Status
+
+```text
+Planned / To Be Evaluated
+```
+
+以下功能皆為長期規劃，目前尚未實作，也未納入當前開發時程：
+
+---
+
+## 36.1 FastAPI / Python Service 評估
+
+未來若有AI/ML相關需求（如點數預測、客戶分群、智慧行銷建議），可評估獨立的FastAPI Python服務：
+- 與現有Laravel主系統通過API通訊
+- 保持Modular Monolith的核心架構不變
+- Python服務只負責AI/ML相關的非核心功能
+
+---
+
+## 36.2 AI Integration 場景（評估中）
+
+可能的AI整合場景：
+- 客戶消費行為分析，預測未來點數使用
+- 自動化行銷活動建議，優化點數發放ROI
+- 異常交易偵測，防範刷點數等惡意行為
+- 智慧客戶分群，提供個人化的點數活動
+
+以上皆為評估中的未來能力，目前未實作任何AI相關功能。
+
+---
+
+## 36.3 長期架構演進
+
+只有當系統規模與業務需求證明必要時，才會評估：
+- Microservices 拆分
+- 事件驅動架構升級
+- Kubernetes 容器編排
+- 專用API Gateway
+
+目前的Modular Monolith架構仍能滿足現有與預見的未來需求。
