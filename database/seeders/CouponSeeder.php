@@ -174,6 +174,9 @@ class CouponSeeder extends Seeder
         $creators = \App\Models\User::where('tenant_id', $tenant->id)->get();
 
         foreach ($usedCoupons as $userCoupon) {
+            if ($creators->isEmpty()) {
+                continue;
+            }
             $creator = $creators->random();
 
             // 使用穩定的核銷記錄 reference：RED_UserCouponID

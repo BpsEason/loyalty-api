@@ -48,7 +48,22 @@ class PointTransactionConcurrencyTest extends TestCase
             'phone' => '1234567890',
         ]);
 
+        // 設定租戶上下文，確保所有操作都在正確的租戶下執行
+        $tenantContext = app(\App\Support\Tenancy\TenantContext::class);
+        $tenantContext->setTenant($this->tenant);
+
         $this->pointService = app(PointService::class);
+    }
+
+    /**
+     * 每個測試結束後清除租戶上下文，避免影響其他測試
+     */
+    protected function tearDown(): void
+    {
+        $tenantContext = app(\App\Support\Tenancy\TenantContext::class);
+        $tenantContext->clear();
+
+        parent::tearDown();
     }
 
     #[Test]
@@ -488,10 +503,20 @@ class PointTransactionConcurrencyTest extends TestCase
         ]);
         $fakeTransaction->id = 99999;
 
+        // 設定當前租戶上下文來觸發租戶不一致檢查
+        $tenantResolver = app(\App\Support\Tenancy\TenantResolver::class);
+        $tenantContext = app(\App\Support\Tenancy\TenantContext::class);
+        $tenantContext->setTenant($this->tenant);
+
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('退款參考交易的租戶與當前租戶不一致');
 
-        $this->pointService->refund($this->customer, 30, 'Wrong tenant refund', $fakeTransaction);
+        try {
+            $this->pointService->refund($this->customer, 30, 'Wrong tenant refund', $fakeTransaction);
+        } finally {
+            // 測試結束後立即清除租戶上下文，避免影響其他測試
+            $tenantContext->clear();
+        }
     }
 
     #[Test]
@@ -579,10 +604,15 @@ class PointTransactionConcurrencyTest extends TestCase
         $tenantContext = app(\App\Support\Tenancy\TenantContext::class);
         $tenantContext->setTenant($this->tenant);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('無法操作其他租戶的客戶');
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('無法操作其他租戶的客戶');
 
-        $this->pointService->earn($tenantBCustomer, 100, 'Cross tenant attempt');
+            $this->pointService->earn($tenantBCustomer, 100, 'Cross tenant attempt');
+        } finally {
+            // 測試結束後立即清除租戶上下文，避免影響其他測試
+            $tenantContext->clear();
+        }
     }
 
     // ==============================================

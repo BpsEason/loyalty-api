@@ -154,8 +154,10 @@ class PointLotFifoTest extends TestCase
         $this->assertCount(1, $lotsTenant2);
         $this->assertEquals(200, $lotsTenant2[0]->original_points);
 
-        // 第一個租戶的批次不會被第二個租戶看到
-        $allLots = PointLot::all();
+        // 第一個租戶的批次不會被第二個租戶看到，只查詢本測試建立的兩個租戶的所有批次
+        $allLots = PointLot::withoutGlobalScope('tenant')
+            ->whereIn('tenant_id', [$this->tenant->id, $tenant2->id])
+            ->get();
         $this->assertCount(2, $allLots);
         $this->assertEquals(100, $allLots[0]->original_points);
         $this->assertEquals(200, $allLots[1]->original_points);

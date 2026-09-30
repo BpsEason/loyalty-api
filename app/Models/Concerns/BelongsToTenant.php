@@ -14,18 +14,13 @@ trait BelongsToTenant
             $user = auth()->user();
             $tenantResolver = app(TenantResolver::class);
 
-            // 如果沒有使用者，直接返回，避免呼叫null的方法
-            if (!$user) {
-                return;
-            }
-
             // Super Admin 建立資料時不自動填入tenant_id，讓手動指定
-            if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
+            if ($user && method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
                 return;
             }
 
-            // 一般使用者自動填入目前的租戶ID
-            if (!$model->tenant_id && $tenantId = $tenantResolver->getCurrentTenantId()) {
+            // 僅當模型完全未設定tenant_id時，才自動填入目前租戶ID，避免覆蓋手動指定的值
+            if (!isset($model->tenant_id) && $tenantId = $tenantResolver->getCurrentTenantId()) {
                 $model->tenant_id = $tenantId;
             }
         });
