@@ -4,6 +4,7 @@ namespace App\Services\Point;
 
 use App\Events\PointEarned;
 use App\Events\PointRedeemed;
+use App\Events\PointsUpdated;
 use App\Models\Customer;
 use App\Models\PointAccount;
 use App\Models\PointLot;
@@ -209,6 +210,17 @@ class PointService
                 now()->toIso8601String()
             ));
 
+            // DB 交易提交成功後才廣播 WebSocket 事件
+            DB::afterCommit(function () use ($account, $customer, $transaction, $amount, $balanceAfter) {
+                PointsUpdated::dispatch(
+                    $account->tenant_id,
+                    $customer->id,
+                    $transaction->id,
+                    $amount,
+                    $balanceAfter
+                );
+            });
+
             return $transaction;
         });
     }
@@ -270,6 +282,17 @@ class PointService
             $reference,
             now()->toIso8601String()
         ));
+
+        // DB 交易提交成功後才廣播 WebSocket 事件
+        DB::afterCommit(function () use ($account, $transaction, $amount, $balanceAfter) {
+            PointsUpdated::dispatch(
+                $account->tenant_id,
+                $account->customer_id,
+                $transaction->id,
+                -$amount,
+                $balanceAfter
+            );
+        });
 
         return $transaction;
     }

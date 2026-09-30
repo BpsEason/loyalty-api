@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\DB;
@@ -34,6 +35,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // 註冊 Broadcast 頻道路由
+        Broadcast::routes();
+
+        // 載入自訂的頻道授權定義
+        require base_path('routes/channels.php');
         // 全域處理 super_admin 權限，所有Policy優先通過超級管理員檢查
         Gate::before(function ($user, $ability) {
             // 確保使用者已登入

@@ -80,6 +80,32 @@ services:
       timeout: 5s
       retries: 5
 
+  reverb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loyalty-reverb
+    restart: unless-stopped
+    working_dir: /var/www
+
+    volumes:
+      - ./:/var/www
+      - vendor:/var/www/vendor
+      - storage:/var/www/storage
+      - bootstrap-cache:/var/www/bootstrap/cache
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+
+    ports:
+      - "8888:8080"
+
+    networks:
+      - loyalty-network
+
 networks:
   loyalty-network:
     driver: bridge
