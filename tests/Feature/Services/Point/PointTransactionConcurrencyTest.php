@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature;
+namespace Tests\Feature\Services\Point;
 
 use App\Models\Customer;
 use App\Models\PointAccount;
