@@ -211,10 +211,10 @@ class PointService
             ));
 
             // DB 交易提交成功後才廣播 WebSocket 事件
-            DB::afterCommit(function () use ($account, $customer, $transaction, $amount, $balanceAfter) {
+            DB::afterCommit(function () use ($account, $transaction, $amount, $balanceAfter) {
                 PointsUpdated::dispatch(
                     $account->tenant_id,
-                    $customer->id,
+                    $account->customer_id,
                     $transaction->id,
                     $amount,
                     $balanceAfter
@@ -437,6 +437,17 @@ class PointService
                 ]);
             }
 
+            // DB 交易提交成功後才廣播 WebSocket 事件
+            DB::afterCommit(function () use ($account, $transaction, $amount, $balanceAfter) {
+                PointsUpdated::dispatch(
+                    $account->tenant_id,
+                    $account->customer_id,
+                    $transaction->id,
+                    $amount,
+                    $balanceAfter
+                );
+            });
+
             return $transaction;
         });
     }
@@ -534,6 +545,17 @@ class PointService
                 'origin_transaction_id' => $transaction->id,
             ]);
 
+            // DB 交易提交成功後才廣播 WebSocket 事件
+            DB::afterCommit(function () use ($account, $transaction, $amount, $balanceAfter) {
+                PointsUpdated::dispatch(
+                    $account->tenant_id,
+                    $account->customer_id,
+                    $transaction->id,
+                    $amount,
+                    $balanceAfter
+                );
+            });
+
             return $transaction;
         });
     }
@@ -599,6 +621,17 @@ class PointService
                 null
             );
 
+            // DB 交易提交成功後才廣播 WebSocket 事件
+            DB::afterCommit(function () use ($account, $transaction, $totalExpireAmount, $balanceAfter) {
+                PointsUpdated::dispatch(
+                    $account->tenant_id,
+                    $account->customer_id,
+                    $transaction->id,
+                    -$totalExpireAmount,
+                    $balanceAfter
+                );
+            });
+
             return [$totalExpireAmount, $transaction];
         });
     }
@@ -660,7 +693,7 @@ class PointService
                 throw new RuntimeException('點數餘額不足，交易失敗');
             }
 
-            return $this->recordPointTransaction(
+            $transaction = $this->recordPointTransaction(
                 PointTransaction::TYPE_EXPIRE,
                 $account,
                 $amount,
@@ -670,6 +703,19 @@ class PointService
                 $reference,
                 $createdBy
             );
+
+            // DB 交易提交成功後才廣播 WebSocket 事件
+            DB::afterCommit(function () use ($account, $transaction, $amount, $balanceAfter) {
+                PointsUpdated::dispatch(
+                    $account->tenant_id,
+                    $account->customer_id,
+                    $transaction->id,
+                    -$amount,
+                    $balanceAfter
+                );
+            });
+
+            return $transaction;
         });
     }
 
