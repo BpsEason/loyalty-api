@@ -49,6 +49,22 @@ class PointLot extends Model
     }
 
     /**
+     * 确保original_points属性始终返回整数类型
+     */
+    public function getOriginalPointsAttribute($value): int
+    {
+        return (int) $value;
+    }
+
+    /**
+     * 确保remaining_points属性始终返回整数类型
+     */
+    public function getRemainingPointsAttribute($value): int
+    {
+        return (int) $value;
+    }
+
+    /**
      * 檢查批次是否還有可用點數
      */
     public function hasRemaining(): bool

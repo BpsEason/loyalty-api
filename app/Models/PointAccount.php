@@ -45,4 +45,28 @@ class PointAccount extends Model implements Auditable
     {
         return $this->hasMany(PointLot::class);
     }
+
+    /**
+     * 确保balance属性始终返回整数类型
+     */
+    public function getBalanceAttribute($value): int
+    {
+        return (int) $value;
+    }
+
+    /**
+     * 确保total_earned属性始终返回整数类型
+     */
+    public function getTotalEarnedAttribute($value): int
+    {
+        return (int) $value;
+    }
+
+    /**
+     * 确保total_redeemed属性始终返回整数类型
+     */
+    public function getTotalRedeemedAttribute($value): int
+    {
+        return (int) $value;
+    }
 }

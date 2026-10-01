@@ -25,7 +25,7 @@ class PointService
     protected int $lockWaitSeconds = 10;
 
     /**
-     * 鎖定自動釋放 TTL（秒）- 延長至20秒避免鎖過早釋放
+     * 鎖定自動釋放 TTL（秒）
      */
     protected int $lockTTL = 20;
 
@@ -65,26 +65,20 @@ class PointService
     /**
      * 在客戶點數狀態鎖與資料庫交易邊界內執行點數操作
      *
-     * Redis Lock (Cache::lock) 解決 application-level contention / serialization，
-     * 但無法替代資料庫層的正確性保證。完整的保護鏈為：
+     * 保護鏈：Redis Lock → DB Transaction → lockForUpdate()
      *
-     * Redis Lock → DB Transaction → lockForUpdate()
-     *
-     * 各層負責不同級別的保護：
-     * - Redis Lock：減少應用層的競爭，避免大量請求同時進入資料庫
-     * - DB Transaction：保證所有操作的原子性
-     * - lockForUpdate()：資料庫級別的行鎖，是最終的一致性邊界，即使 Redis Lock 失效仍能保護正確性
-     *
-     * Redis 不可用時 fallback 到 DB locking，correctness 不降低，但 performance / contention characteristics 可能改變。
-     * 交易最多重試 3 次，處理短暫的資料庫死鎖。
+     * 重要設計決策：
+     * - 絕不 fallback 到「無 Redis 鎖」的路徑
+     * - 鎖超時或任何例外都直接往上拋
+     * - 交易最多重試 3 次，處理短暫的資料庫死鎖
+     * - 不在 finally 手動 release（block() 會自動處理）
      */
     protected function executeWithCustomerPointStateLock(Customer $customer, callable $callback): mixed
     {
         $lockKey = $this->getCustomerPointStateLockKey($customer);
+        $lock = Cache::lock($lockKey, $this->lockTTL);
 
         try {
-            $lock = Cache::lock($lockKey, $this->lockTTL);
-
             return $lock->block($this->lockWaitSeconds, function () use ($customer, $callback) {
                 return DB::transaction(function () use ($customer, $callback) {
                     $account = $this->lockOrCreatePointAccount($customer);
@@ -93,14 +87,12 @@ class PointService
             });
         } catch (LockTimeoutException $e) {
             throw new RuntimeException('系統繁忙，請稍後再試', 0, $e);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             report($e);
-
-            return DB::transaction(function () use ($customer, $callback) {
-                $account = $this->lockOrCreatePointAccount($customer);
-                return $callback($account);
-            }, 3);
+            throw $e;
         }
+        // 注意：這裡刻意不放 finally release
+        // Laravel 的 block() 會在 callback 結束後自動釋放鎖
     }
 
     /**

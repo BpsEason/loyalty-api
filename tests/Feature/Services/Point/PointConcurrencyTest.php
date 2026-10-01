@@ -19,100 +19,128 @@ class PointConcurrencyTest extends TestCase
 
     protected function setUp(): void
     {
+        // 用 __DIR__ 計算專案根目錄路徑，不依賴 Laravel 的 base_path() (避免在 Application 初始化前呼叫)
+        // __DIR__ = tests/Feature/Services/Point，往上跳 4 層到專案根目錄
+        $rootPath = dirname(dirname(dirname(dirname(__DIR__))));
+        $envPath = $rootPath . '/.env';
+        $envContents = file_get_contents($envPath);
+        $envValues = [];
+
+        // 解析 .env 檔案內容
+        preg_match_all('/^([A-Z_]+)=(.*)$/m', $envContents, $matches, PREG_SET_ORDER);
+        foreach ($matches as $match) {
+            $envValues[$match[1]] = trim($match[2], '"');
+        }
+
+        // 在 parent::setUp() 之前，先修改 $_ENV 和 $_SERVER 超全局變數
+        // 這樣 Laravel 在初始化時就會讀取到正確的 MySQL 設定，覆蓋 phpunit.xml 中的 sqlite 設定
+        $_ENV['DB_CONNECTION'] = 'mysql';
+        $_SERVER['DB_CONNECTION'] = 'mysql';
+        $_ENV['DB_HOST'] = $envValues['DB_HOST'] ?? '127.0.0.1';
+        $_SERVER['DB_HOST'] = $envValues['DB_HOST'] ?? '127.0.0.1';
+        $_ENV['DB_PORT'] = $envValues['DB_PORT'] ?? '3306';
+        $_SERVER['DB_PORT'] = $envValues['DB_PORT'] ?? '3306';
+        $_ENV['DB_DATABASE'] = $envValues['DB_DATABASE'] ?? 'laravel';
+        $_SERVER['DB_DATABASE'] = $envValues['DB_DATABASE'] ?? 'laravel';
+        $_ENV['DB_USERNAME'] = $envValues['DB_USERNAME'] ?? 'root';
+        $_SERVER['DB_USERNAME'] = $envValues['DB_USERNAME'] ?? 'root';
+        $_ENV['DB_PASSWORD'] = $envValues['DB_PASSWORD'] ?? '';
+        $_SERVER['DB_PASSWORD'] = $envValues['DB_PASSWORD'] ?? '';
+
+        // 現在呼叫 parent::setUp()，Laravel 會使用我們剛剛設定的 MySQL 參數
         parent::setUp();
-
-        // 清除可能存在的Redis鎖
-        $this->clearRedisLocks();
     }
 
-    protected function clearRedisLocks(): void
+    protected function clearRedisLocks(int $customerId, int $tenantId): void
     {
-        // 清除測試期間可能遺留的Redis鎖
-        \Illuminate\Support\Facades\Cache::flush();
+        // 清除與本測試相關的Redis鎖，避免影響其他測試
+        $lockKey = sprintf('point_customer:%d:tenant:%d', $customerId, $tenantId);
+        \Illuminate\Support\Facades\Cache::forget($lockKey);
     }
-
-
 
     /**
-     * 啟動多個併發任務，使用獨立的數據庫事務模擬真實並行場景
-     * 遵循專案現有併發測試模式，避免Windows WSL環境下的多進程問題
+     * 啟動多個真實的獨立PHP進程來測試process-level concurrency
+     * 使用Symfony Process並行啟動所有worker，然後等待全部完成
      */
     protected function startWorkers(int $count, string $operation, int $amount, int $tenantId, int $customerId): array
     {
-        $successCount = 0;
-        $failureCount = 0;
-        $results = [];
-        $customer = Customer::findOrFail($customerId);
-        $pointService = app(PointService::class);
+        $processes = [];
+        $basePath = base_path();
+        $phpBinary = PHP_BINARY; // 使用當前PHP執行檔路徑
 
-        // 執行100個獨立的事務來模擬併發
+        // 明確設定所有 DB 相關環境變數，確保子進程與父進程使用完全相同的 MySQL 連線
+        $env = [];
+
+        // 複製所有父進程的環境變數
+        foreach (getenv() as $key => $value) {
+            $env[$key] = $value;
+        }
+
+        // 強制覆寫 DB 相關設定，確保 Worker 絕對使用與 Parent 相同的 MySQL
+        $env['DB_CONNECTION'] = 'mysql';
+        $env['DB_HOST'] = config('database.connections.mysql.host');
+        $env['DB_PORT'] = config('database.connections.mysql.port');
+        $env['DB_DATABASE'] = config('database.connections.mysql.database');
+        $env['DB_USERNAME'] = config('database.connections.mysql.username');
+        $env['DB_PASSWORD'] = config('database.connections.mysql.password');
+
+        // 確保 APP_ENV 正確
+        $env['APP_ENV'] = 'testing';
+        // 設定 Redis 連線
+        $env['REDIS_HOST'] = env('REDIS_HOST', '127.0.0.1');
+
+        // 先建立所有worker進程，設定環境變數後再啟動
         for ($i = 0; $i < $count; $i++) {
-            try {
-                // 每個請求使用獨立的事務來模擬真實並行場景
-                DB::beginTransaction();
+            $command = [
+                $phpBinary,
+                'artisan',
+                'point:concurrency-worker',
+                $operation,
+                (string) $amount,
+                (string) $tenantId,
+                (string) $customerId,
+                (string) $i,
+                '--no-ansi'
+            ];
 
-                // 重新查詢帳戶以獲取最新數據，使用行鎖防止競爭
-                $account = PointAccount::where('customer_id', $customerId)
-                    ->lockForUpdate()
-                    ->firstOrFail();
+            $process = new Process($command, $basePath);
+            $process->setTimeout(300); // 設定足夠長的超時時間
+            $process->setEnv($env); // 為子進程設定正確的環境變數，確保子進程能連接正確資料庫
 
-                if ($operation === 'earn') {
-                    $transaction = $pointService->earn(
-                        $customer,
-                        $amount,
-                        "併發測試獲得點數-{$i}",
-                        null,
-                        null
-                    );
-                    $successCount++;
-                    $results[] = [
-                        'success' => true,
-                        'message' => 'earn succeeded',
-                        'transaction_id' => $transaction->id
-                    ];
-                    DB::commit();
-                } elseif ($operation === 'redeem') {
-                    if ($account->balance >= $amount) {
-                        $transaction = $pointService->redeem(
-                            $customer,
-                            $amount,
-                            "併發測試兌換點數-{$i}",
-                            null,
-                            null
-                        );
-                        $successCount++;
-                        $results[] = [
-                            'success' => true,
-                            'message' => 'redeem succeeded',
-                            'transaction_id' => $transaction->id
-                        ];
-                        DB::commit();
-                    } else {
-                        DB::rollBack();
-                        $failureCount++;
-                        $results[] = [
-                            'success' => false,
-                            'message' => '點數餘額不足'
-                        ];
-                    }
-                }
-            } catch (Exception $e) {
-                DB::rollBack();
-                $failureCount++;
+            $process->start();
+            $processes[] = $process;
+        }
+
+        // 等待所有進程完成並收集結果
+        $results = [];
+        foreach ($processes as $index => $process) {
+            $process->wait();
+
+            $output = trim($process->getOutput());
+            $errorOutput = trim($process->getErrorOutput());
+            $exitCode = $process->getExitCode();
+
+            $decoded = null;
+            if ($output !== '') {
+                $decoded = json_decode($output, true);
+            }
+
+            if (is_array($decoded)) {
+                $results[] = $decoded;
+            } else {
                 $results[] = [
                     'success' => false,
-                    'message' => $e->getMessage(),
-                    'exception' => get_class($e)
+                    'message' => 'Worker JSON output 無法解析',
+                    'worker_index' => $index,
+                    'exit_code' => $exitCode,
+                    'stdout' => $output,
+                    'stderr' => $errorOutput,
                 ];
-                // 只在非預期錯誤時重新拋出
-                if (!str_contains($e->getMessage(), '點數') && !str_contains($e->getMessage(), '餘額')) {
-                    throw $e;
-                }
             }
         }
 
-        echo "\n=== 併發任務統計 ===\n";
-        echo "總數: {$count}, 成功: {$successCount}, 失敗: {$failureCount}\n";
+        // 驗證結果數量與worker數量一致
+        $this->assertCount($count, $results, '所有worker都必須返回結果');
 
         return $results;
     }
@@ -129,8 +157,8 @@ class PointConcurrencyTest extends TestCase
             ->sum('remaining_points');
 
         $this->assertSame(
-            $account->balance,
-            $sumRemainingPoints,
+            (int) $account->balance,
+            (int) $sumRemainingPoints,
             '帳戶餘額必須等於所有點數批次剩餘點數之總和'
         );
 
@@ -139,17 +167,17 @@ class PointConcurrencyTest extends TestCase
             ->where('remaining_points', '<', 0)
             ->count();
 
-        $this->assertSame(0, $negativeLots, '不應該有任何點數批次出現負數的剩餘點數');
+        $this->assertSame(0, (int) $negativeLots, '不應該有任何點數批次出現負數的剩餘點數');
 
         // 驗證沒有剩餘點數超過原始點數的狀況
         $invalidLots = PointLot::where('point_account_id', $account->id)
             ->whereRaw('remaining_points > original_points')
             ->count();
 
-        $this->assertSame(0, $invalidLots, '不應該有任何點數批次的剩餘點數超過原始點數');
+        $this->assertSame(0, (int) $invalidLots, '不應該有任何點數批次的剩餘點數超過原始點數');
 
         // 驗證帳戶餘額不為負數
-        $this->assertGreaterThanOrEqual(0, $account->balance, '帳戶餘額不能為負數');
+        $this->assertGreaterThanOrEqual(0, (int) $account->balance, '帳戶餘額不能為負數');
     }
 
     /**
@@ -185,21 +213,11 @@ class PointConcurrencyTest extends TestCase
         // 提交所有已建立的資料，確保子進程可以讀取到
         DB::commit();
 
-        // 啟動100個worker，每個worker呼叫earn(10)
+        // 清除與本測試相關的Redis鎖
+        $this->clearRedisLocks($customer->id, $tenant->id);
+
+        // 啟動100個worker進行真正的併發測試
         $results = $this->startWorkers(100, 'earn', 10, $tenant->id, $customer->id);
-
-        // 重新開始測試的事務，以便可以重新查詢資料庫
-        DB::beginTransaction();
-
-        // 輸出所有結果以便調試
-        echo "\n=== All Worker Results ===\n";
-        foreach ($results as $index => $result) {
-            echo "Worker {$index}: " . ($result['success'] ? 'SUCCESS' : 'FAILED') . " - {$result['message']}\n";
-            if (!$result['success'] && isset($result['exception'])) {
-                echo "  Exception: {$result['exception']} at {$result['file']}:{$result['line']}\n";
-                echo "  Trace: {$result['trace']}\n";
-            }
-        }
 
         // 統計成功與失敗的數量
         $successCount = count(array_filter($results, fn($r) => $r['success']));
@@ -207,14 +225,8 @@ class PointConcurrencyTest extends TestCase
 
         $pointAccount->refresh();
 
-        echo "\n=== 100 Concurrent Earn Test Results ===\n";
-        echo "Worker count: 100\n";
-        echo "Success count: {$successCount}\n";
-        echo "Failure count: {$failureCount}\n";
-        echo "Final balance: {$pointAccount->balance}\n";
-
         // 驗證最終餘額為1000（100個worker各加10點）
-        $this->assertSame(1000, $pointAccount->balance, '所有earn操作完成後，帳戶餘額應為1000');
+        $this->assertSame(1000, (int) $pointAccount->balance, '所有earn操作完成後，帳戶餘額應為1000');
 
         // 驗證有100個earn交易
         $earnTransactions = PointTransaction::where('point_account_id', $pointAccount->id)
@@ -224,10 +236,7 @@ class PointConcurrencyTest extends TestCase
 
         // 驗證所有不變條件都滿足
         $sumRemainingPoints = PointLot::where('point_account_id', $pointAccount->id)->sum('remaining_points');
-        echo "Lot sum: {$sumRemainingPoints}\n";
-
         $this->assertPointInvariants($pointAccount);
-        echo "Invariants: PASS\n";
     }
 
     /**
@@ -275,11 +284,11 @@ class PointConcurrencyTest extends TestCase
         // 提交所有已建立的資料，確保子進程可以讀取到
         DB::commit();
 
-        // 啟動100個worker，每個worker呼叫redeem(5)
-        $results = $this->startWorkers(100, 'redeem', 5, $tenant->id, $customer->id);
+        // 清除與本測試相關的Redis鎖
+        $this->clearRedisLocks($customer->id, $tenant->id);
 
-        // 重新開始測試的事務
-        DB::beginTransaction();
+        // 啟動100個worker進行真正的併發測試
+        $results = $this->startWorkers(100, 'redeem', 5, $tenant->id, $customer->id);
 
         // 統計成功與失敗的數量
         $successCount = count(array_filter($results, fn($r) => $r['success']));
@@ -287,14 +296,8 @@ class PointConcurrencyTest extends TestCase
 
         $pointAccount->refresh();
 
-        echo "\n=== 100 Concurrent Redeem Test Results ===\n";
-        echo "Worker count: 100\n";
-        echo "Success count: {$successCount}\n";
-        echo "Failure count: {$failureCount}\n";
-        echo "Final balance: {$pointAccount->balance}\n";
-
         // 驗證最終餘額為500（100個worker各減5點）
-        $this->assertSame(500, $pointAccount->balance, '所有redeem操作完成後，帳戶餘額應為500');
+        $this->assertSame(500, (int) $pointAccount->balance, '所有redeem操作完成後，帳戶餘額應為500');
 
         // 驗證有100個redeem交易
         $redeemTransactions = PointTransaction::where('point_account_id', $pointAccount->id)
@@ -304,10 +307,7 @@ class PointConcurrencyTest extends TestCase
 
         // 驗證所有不變條件都滿足
         $sumRemainingPoints = PointLot::where('point_account_id', $pointAccount->id)->sum('remaining_points');
-        echo "Lot sum: {$sumRemainingPoints}\n";
-
         $this->assertPointInvariants($pointAccount);
-        echo "Invariants: PASS\n";
     }
 
     /**
@@ -355,23 +355,17 @@ class PointConcurrencyTest extends TestCase
         // 提交所有已建立的資料，確保子進程可以讀取到
         DB::commit();
 
-        // 啟動100個worker，每個worker呼叫redeem(10)
-        $results = $this->startWorkers(100, 'redeem', 10, $tenant->id, $customer->id);
+        // 清除與本測試相關的Redis鎖
+        $this->clearRedisLocks($customer->id, $tenant->id);
 
-        // 重新開始測試的事務
-        DB::beginTransaction();
+        // 啟動100個worker進行真正的併發測試
+        $results = $this->startWorkers(100, 'redeem', 10, $tenant->id, $customer->id);
 
         // 統計成功與失敗的數量
         $successCount = count(array_filter($results, fn($r) => $r['success']));
         $failureCount = count($results) - $successCount;
 
         $pointAccount->refresh();
-
-        echo "\n=== 100 Concurrent Oversubscription Test Results ===\n";
-        echo "Worker count: 100\n";
-        echo "Success count: {$successCount}\n";
-        echo "Failure count: {$failureCount}\n";
-        echo "Final balance: {$pointAccount->balance}\n";
 
         // 驗證最多只能成功50次（50*10=500）
         $this->assertLessThanOrEqual(50, $successCount, '最多只能有50個兌換成功');
@@ -382,15 +376,11 @@ class PointConcurrencyTest extends TestCase
             ->where('type', PointTransaction::TYPE_REDEEM)
             ->sum('amount');
 
-        echo "Total redeemed points: {$totalRedeemed}\n";
         $this->assertLessThanOrEqual(500, $totalRedeemed, '總兌換點數不能超過初始的500點');
 
         // 驗證所有不變條件都滿足
         $sumRemainingPoints = PointLot::where('point_account_id', $pointAccount->id)->sum('remaining_points');
-        echo "Lot sum: {$sumRemainingPoints}\n";
-
         $this->assertPointInvariants($pointAccount);
-        echo "Invariants: PASS\n";
     }
 
     /**
@@ -398,7 +388,6 @@ class PointConcurrencyTest extends TestCase
      */
     protected function tearDown(): void
     {
-        $this->clearRedisLocks();
         parent::tearDown();
     }
 }
