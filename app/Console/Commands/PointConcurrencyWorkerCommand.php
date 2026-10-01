@@ -12,10 +12,12 @@ use App\Support\Tenancy\TenantContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Redis;
 
 class PointConcurrencyWorkerCommand extends Command
 {
-    protected $signature = 'point:concurrency-worker {operation} {amount} {tenant_id} {customer_id} {index}';
+    protected $signature = 'point:concurrency-worker {operation} {amount} {tenant_id} {customer_id} {index} {barrier_id}';
     protected $description = 'Worker command for point concurrency testing';
 
     public function handle(
@@ -32,8 +34,30 @@ class PointConcurrencyWorkerCommand extends Command
             $tenantId = (int) $this->argument('tenant_id');
             $customerId = (int) $this->argument('customer_id');
             $index = (int) $this->argument('index');
+            $barrierId = $this->argument('barrier_id');
 
-            // Worker 啟動日誌
+            // 診斷：輸出Cache和Redis連線資訊
+            $cacheStore = config('cache.default');
+            $cacheDriver = config('cache.stores.' . $cacheStore . '.driver');
+            $redisConnection = config('cache.stores.redis.connection', 'unknown');
+            $redisHost = config('database.redis.default.host');
+            $redisPort = config('database.redis.default.port');
+            $redisDb = config('database.redis.default.database');
+            $redisCacheDb = config('database.redis.cache.database');
+
+            // 測試Cache::increment是否正常工作
+            $testKey = "diagnostic:worker:{$barrierId}:{$index}";
+            try {
+                $incrementResult = Cache::increment($testKey);
+                $readResult = Cache::get($testKey);
+                Cache::forget($testKey);
+                $cacheWriteReadSuccess = ($incrementResult === 1 && $readResult === 1);
+            } catch (\Exception $e) {
+                $cacheWriteReadSuccess = false;
+                $cacheException = $e->getMessage();
+            }
+
+            // Worker 啟動日誌（包含完整診斷資訊）
             Log::info('Point concurrency worker started', [
                 'worker' => $index,
                 'pid' => getmypid(),
@@ -41,10 +65,50 @@ class PointConcurrencyWorkerCommand extends Command
                 'amount' => $amount,
                 'tenant_id' => $tenantId,
                 'customer_id' => $customerId,
+                'barrier_id' => $barrierId,
                 'db_connection' => config('database.default'),
                 'db_host' => config('database.connections.' . config('database.default') . '.host'),
                 'db_database' => config('database.connections.' . config('database.default') . '.database'),
                 'db_username' => config('database.connections.' . config('database.default') . '.username'),
+                // Cache診斷
+                'cache_store' => $cacheStore,
+                'cache_driver' => $cacheDriver,
+                'cache_write_read_success' => $cacheWriteReadSuccess ?? false,
+                'cache_exception' => $cacheException ?? null,
+                // Redis診斷（如果使用redis的話）
+                'redis_connection' => $redisConnection,
+                'redis_host' => $redisHost,
+                'redis_port' => $redisPort,
+                'redis_database_default' => $redisDb,
+                'redis_database_cache' => $redisCacheDb,
+            ]);
+
+            // 向Barrier報到，使用Redis Atomic Increment避免競爭
+            Redis::incr("barrier:{$barrierId}:ready");
+
+            Log::info('Point worker reported to barrier', [
+                'worker' => $index,
+                'barrier_id' => $barrierId,
+                'pid' => getmypid(),
+            ]);
+
+            // 等待父進程釋放Barrier
+            $timeout = time() + 30;
+            while (time() < $timeout) {
+                if (Redis::get("barrier:{$barrierId}:start")) {
+                    break;
+                }
+                usleep(1000);
+            }
+
+            if (!Redis::get("barrier:{$barrierId}:start")) {
+                throw new \RuntimeException('Barrier timeout');
+            }
+
+            Log::info('Point worker barrier released, starting operation', [
+                'worker' => $index,
+                'barrier_id' => $barrierId,
+                'pid' => getmypid(),
             ]);
 
             // 先查詢基礎資料，確認是否存在

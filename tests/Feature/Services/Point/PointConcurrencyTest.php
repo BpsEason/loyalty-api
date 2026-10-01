@@ -10,6 +10,8 @@ use App\Models\Tenant;
 use App\Services\Point\PointService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Redis;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -79,7 +81,7 @@ class PointConcurrencyTest extends TestCase
     {
         // 清除與本測試相關的Redis鎖，避免影響其他測試
         $lockKey = sprintf('point_customer:%d:tenant:%d', $customerId, $tenantId);
-        \Illuminate\Support\Facades\Cache::forget($lockKey);
+        Cache::lock($lockKey)->forceRelease();
     }
 
     /**
@@ -91,82 +93,111 @@ class PointConcurrencyTest extends TestCase
         $processes = [];
         $basePath = base_path();
         $phpBinary = PHP_BINARY; // 使用當前PHP執行檔路徑
+        $barrierId = sprintf(
+            '%d_%d_%s',
+            $tenantId,
+            $customerId,
+            uniqid()
+        );
 
-        // 明確設定所有 DB 相關環境變數，確保子進程與父進程使用完全相同的 MySQL 連線
-        $env = [];
+        try {
+            // 建立Barrier
+            $this->createBarrier(
+                $barrierId,
+                $count
+            );
 
-        // 複製所有父進程的環境變數
-        foreach (getenv() as $key => $value) {
-            $env[$key] = $value;
-        }
+            // 明確設定所有 DB 相關環境變數，確保子進程與父進程使用完全相同的 MySQL 連線
+            $env = [];
 
-        // 強制覆寫 DB 相關設定，確保 Worker 絕對使用與 Parent 相同的 MySQL
-        $env['DB_CONNECTION'] = 'mysql';
-        $env['DB_HOST'] = config('database.connections.mysql.host');
-        $env['DB_PORT'] = config('database.connections.mysql.port');
-        $env['DB_DATABASE'] = config('database.connections.mysql.database');
-        $env['DB_USERNAME'] = config('database.connections.mysql.username');
-        $env['DB_PASSWORD'] = config('database.connections.mysql.password');
-
-        // 確保 APP_ENV 正確
-        $env['APP_ENV'] = 'testing';
-        // 設定 Redis 連線
-        $env['REDIS_HOST'] = env('REDIS_HOST', '127.0.0.1');
-
-        // 先建立所有worker進程，設定環境變數後再啟動
-        for ($i = 0; $i < $count; $i++) {
-            $command = [
-                $phpBinary,
-                'artisan',
-                'point:concurrency-worker',
-                $operation,
-                (string) $amount,
-                (string) $tenantId,
-                (string) $customerId,
-                (string) $i,
-                '--no-ansi'
-            ];
-
-            $process = new Process($command, $basePath);
-            $process->setTimeout(300); // 設定足夠長的超時時間
-            $process->setEnv($env); // 為子進程設定正確的環境變數，確保子進程能連接正確資料庫
-
-            $process->start();
-            $processes[] = $process;
-        }
-
-        // 等待所有進程完成並收集結果
-        $results = [];
-        foreach ($processes as $index => $process) {
-            $process->wait();
-
-            $output = trim($process->getOutput());
-            $errorOutput = trim($process->getErrorOutput());
-            $exitCode = $process->getExitCode();
-
-            $decoded = null;
-            if ($output !== '') {
-                $decoded = json_decode($output, true);
+            // 複製所有父進程的環境變數
+            foreach (getenv() as $key => $value) {
+                $env[$key] = $value;
             }
 
-            if (is_array($decoded)) {
-                $results[] = $decoded;
-            } else {
-                $results[] = [
-                    'success' => false,
-                    'message' => 'Worker JSON output 無法解析',
-                    'worker_index' => $index,
-                    'exit_code' => $exitCode,
-                    'stdout' => $output,
-                    'stderr' => $errorOutput,
+            // 強制覆寫 DB 相關設定，確保 Worker 絕對使用與 Parent 相同的 MySQL
+            $env['DB_CONNECTION'] = 'mysql';
+            $env['DB_HOST'] = config('database.connections.mysql.host');
+            $env['DB_PORT'] = config('database.connections.mysql.port');
+            $env['DB_DATABASE'] = config('database.connections.mysql.database');
+            $env['DB_USERNAME'] = config('database.connections.mysql.username');
+            $env['DB_PASSWORD'] = config('database.connections.mysql.password');
+
+            // 確保 APP_ENV 正確
+            $env['APP_ENV'] = 'testing';
+
+            // 先建立所有worker進程，設定環境變數後再啟動
+            for ($i = 0; $i < $count; $i++) {
+                $command = [
+                    $phpBinary,
+                    'artisan',
+                    'point:concurrency-worker',
+                    $operation,
+                    (string) $amount,
+                    (string) $tenantId,
+                    (string) $customerId,
+                    (string) $i,
+                    $barrierId,
+                    '--no-ansi'
                 ];
+
+                $process = new Process($command, $basePath);
+                $process->setTimeout(300); // 設定足夠長的超時時間
+                $process->setEnv($env); // 為子進程設定正確的環境變數，確保子進程能連接正確資料庫
+
+                $process->start();
+                $processes[] = $process;
             }
+
+            // 等待所有worker都報到完成
+            $this->waitUntilAllReady(
+                $barrierId,
+                $count
+            );
+
+            // 釋放Barrier，讓所有worker同時開始執行
+            $this->releaseBarrier(
+                $barrierId
+            );
+
+            // 等待所有進程完成並收集結果
+            $results = [];
+            foreach ($processes as $index => $process) {
+                $process->wait();
+
+                $output = trim($process->getOutput());
+                $errorOutput = trim($process->getErrorOutput());
+                $exitCode = $process->getExitCode();
+
+                $decoded = null;
+                if ($output !== '') {
+                    $decoded = json_decode($output, true);
+                }
+
+                if (is_array($decoded)) {
+                    $results[] = $decoded;
+                } else {
+                    $results[] = [
+                        'success' => false,
+                        'message' => 'Worker JSON output 無法解析',
+                        'worker_index' => $index,
+                        'exit_code' => $exitCode,
+                        'stdout' => $output,
+                        'stderr' => $errorOutput,
+                    ];
+                }
+            }
+
+            // 驗證結果數量與worker數量一致
+            $this->assertCount($count, $results, '所有worker都必須返回結果');
+
+            return $results;
+        } finally {
+            // 無論成功或失敗，都清理Redis Barrier相關鍵
+            Redis::del("barrier:{$barrierId}:ready");
+            Redis::del("barrier:{$barrierId}:start");
+            Redis::del("barrier:{$barrierId}:expected");
         }
-
-        // 驗證結果數量與worker數量一致
-        $this->assertCount($count, $results, '所有worker都必須返回結果');
-
-        return $results;
     }
 
     /**
@@ -405,6 +436,69 @@ class PointConcurrencyTest extends TestCase
         // 驗證所有不變條件都滿足
         $sumRemainingPoints = PointLot::where('point_account_id', $pointAccount->id)->sum('remaining_points');
         $this->assertPointInvariants($pointAccount);
+    }
+
+    protected function createBarrier(
+        string $barrierId,
+        int $workerCount
+    ): void {
+        Redis::del("barrier:{$barrierId}:ready");
+        Redis::del("barrier:{$barrierId}:start");
+        Redis::del("barrier:{$barrierId}:expected");
+
+        Redis::set(
+            "barrier:{$barrierId}:expected",
+            $workerCount
+        );
+        Redis::expire("barrier:{$barrierId}:expected", 60);
+    }
+
+    protected function waitUntilAllReady(
+        string $barrierId,
+        int $workerCount
+    ): void {
+        $timeout = now()->addSeconds(30);
+        $ready = 0;
+
+        while (now()->lt($timeout)) {
+            $ready = (int) Redis::get(
+                "barrier:{$barrierId}:ready"
+            ) ?: 0;
+
+            // 每5秒輸出一次當前狀態
+            if ((int)(now()->timestamp - ($timeout->timestamp - 30)) % 5 === 0) {
+                info('Parent waiting for workers', [
+                    'barrier_id' => $barrierId,
+                    'ready' => $ready,
+                    'expected' => $workerCount,
+                ]);
+            }
+
+            if ($ready >= $workerCount) {
+                info('All workers ready, releasing barrier', [
+                    'barrier_id' => $barrierId,
+                    'ready' => $ready,
+                    'expected' => $workerCount,
+                ]);
+                return;
+            }
+
+            usleep(10000);
+        }
+
+        $this->fail(
+            "Barrier timeout: only {$ready}/{$workerCount} workers ready"
+        );
+    }
+
+    protected function releaseBarrier(
+        string $barrierId
+    ): void {
+        Redis::set(
+            "barrier:{$barrierId}:start",
+            1
+        );
+        Redis::expire("barrier:{$barrierId}:start", 60);
     }
 
     /**
