@@ -191,7 +191,39 @@ class PointConcurrencyTest extends TestCase
             // 驗證結果數量與worker數量一致
             $this->assertCount($count, $results, '所有worker都必須返回結果');
 
-            return $results;
+            // 收集所有成功worker的started_at
+            $startedAts = [];
+            foreach ($results as $result) {
+                if (isset($result['success']) && $result['success'] && isset($result['started_at'])) {
+                    $startedAts[] = (float) $result['started_at'];
+                }
+            }
+
+            // 計算spread_ms（如果有足夠的數據）
+            $spreadMs = 0;
+            if (count($startedAts) >= 2) {
+                $minTime = min($startedAts);
+                $maxTime = max($startedAts);
+                $spreadMs = ($maxTime - $minTime) * 1000;
+            }
+
+            // 統計成功數量
+            $successCount = count(array_filter($results, fn($r) => $r['success']));
+
+            // 輸出診斷信息
+            echo sprintf(
+                "Worker stats: worker_count=%d, success_count=%d, spread_ms=%.2f\n",
+                $count,
+                $successCount,
+                $spreadMs
+            );
+
+            return [
+                'results' => $results,
+                'success_count' => $successCount,
+                'spread_ms' => $spreadMs,
+                'worker_count' => $count
+            ];
         } finally {
             // 無論成功或失敗，都清理Redis Barrier相關鍵
             Redis::del("barrier:{$barrierId}:ready");
@@ -272,13 +304,13 @@ class PointConcurrencyTest extends TestCase
         $this->clearRedisLocks($customer->id, $tenant->id);
 
         // 啟動100個worker進行真正的併發測試
-        $results = $this->startWorkers(100, 'earn', 10, $tenant->id, $customer->id);
-
-        // 統計成功與失敗的數量
-        $successCount = count(array_filter($results, fn($r) => $r['success']));
-        $failureCount = count($results) - $successCount;
+        $workerStats = $this->startWorkers(100, 'earn', 10, $tenant->id, $customer->id);
+        $successCount = $workerStats['success_count'];
 
         $pointAccount->refresh();
+
+        // 額外確認所有100個worker都成功
+        $this->assertSame(100, $successCount, '所有100個earn worker都必須成功');
 
         // 驗證最終餘額為1000（100個worker各加10點）
         $this->assertSame(1000, (int) $pointAccount->balance, '所有earn操作完成後，帳戶餘額應為1000');
@@ -343,11 +375,8 @@ class PointConcurrencyTest extends TestCase
         $this->clearRedisLocks($customer->id, $tenant->id);
 
         // 啟動100個worker進行真正的併發測試
-        $results = $this->startWorkers(100, 'redeem', 5, $tenant->id, $customer->id);
-
-        // 統計成功與失敗的數量
-        $successCount = count(array_filter($results, fn($r) => $r['success']));
-        $failureCount = count($results) - $successCount;
+        $workerStats = $this->startWorkers(100, 'redeem', 5, $tenant->id, $customer->id);
+        $successCount = $workerStats['success_count'];
 
         $pointAccount->refresh();
 
@@ -414,11 +443,8 @@ class PointConcurrencyTest extends TestCase
         $this->clearRedisLocks($customer->id, $tenant->id);
 
         // 啟動100個worker進行真正的併發測試
-        $results = $this->startWorkers(100, 'redeem', 10, $tenant->id, $customer->id);
-
-        // 統計成功與失敗的數量
-        $successCount = count(array_filter($results, fn($r) => $r['success']));
-        $failureCount = count($results) - $successCount;
+        $workerStats = $this->startWorkers(100, 'redeem', 10, $tenant->id, $customer->id);
+        $successCount = $workerStats['success_count'];
 
         $pointAccount->refresh();
 

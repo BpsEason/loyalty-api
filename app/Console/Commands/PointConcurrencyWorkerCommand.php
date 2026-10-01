@@ -105,10 +105,14 @@ class PointConcurrencyWorkerCommand extends Command
                 throw new \RuntimeException('Barrier timeout');
             }
 
+            // 記錄通過Barrier後的開始時間
+            $startedAt = microtime(true);
+
             Log::info('Point worker barrier released, starting operation', [
                 'worker' => $index,
                 'barrier_id' => $barrierId,
                 'pid' => getmypid(),
+                'started_at' => $startedAt,
             ]);
 
             // 先查詢基礎資料，確認是否存在
@@ -191,7 +195,8 @@ class PointConcurrencyWorkerCommand extends Command
             echo json_encode([
                 'success' => true,
                 'transaction_id' => $result->id,
-                'message' => '操作成功'
+                'message' => '操作成功',
+                'started_at' => $startedAt
             ]) . PHP_EOL;
 
             return 0;
