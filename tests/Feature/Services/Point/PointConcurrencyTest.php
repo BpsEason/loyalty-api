@@ -26,28 +26,52 @@ class PointConcurrencyTest extends TestCase
         $envContents = file_get_contents($envPath);
         $envValues = [];
 
-        // 解析 .env 檔案內容
+        // 解析 .env 檔案內容做為預設值
         preg_match_all('/^([A-Z_]+)=(.*)$/m', $envContents, $matches, PREG_SET_ORDER);
         foreach ($matches as $match) {
             $envValues[$match[1]] = trim($match[2], '"');
         }
 
         // 在 parent::setUp() 之前，先修改 $_ENV 和 $_SERVER 超全局變數
-        // 這樣 Laravel 在初始化時就會讀取到正確的 MySQL 設定，覆蓋 phpunit.xml 中的 sqlite 設定
-        $_ENV['DB_CONNECTION'] = 'mysql';
-        $_SERVER['DB_CONNECTION'] = 'mysql';
-        $_ENV['DB_HOST'] = $envValues['DB_HOST'] ?? '127.0.0.1';
-        $_SERVER['DB_HOST'] = $envValues['DB_HOST'] ?? '127.0.0.1';
-        $_ENV['DB_PORT'] = $envValues['DB_PORT'] ?? '3306';
-        $_SERVER['DB_PORT'] = $envValues['DB_PORT'] ?? '3306';
-        $_ENV['DB_DATABASE'] = $envValues['DB_DATABASE'] ?? 'laravel';
-        $_SERVER['DB_DATABASE'] = $envValues['DB_DATABASE'] ?? 'laravel';
-        $_ENV['DB_USERNAME'] = $envValues['DB_USERNAME'] ?? 'root';
-        $_SERVER['DB_USERNAME'] = $envValues['DB_USERNAME'] ?? 'root';
-        $_ENV['DB_PASSWORD'] = $envValues['DB_PASSWORD'] ?? '';
-        $_SERVER['DB_PASSWORD'] = $envValues['DB_PASSWORD'] ?? '';
+        // 只在環境變數尚未被外部設定時才使用 .env 的值，尊重 CI 或其他外部環境提供的設定
+        if (!isset($_ENV['DB_CONNECTION'])) {
+            $_ENV['DB_CONNECTION'] = 'mysql';
+        }
+        if (!isset($_SERVER['DB_CONNECTION'])) {
+            $_SERVER['DB_CONNECTION'] = 'mysql';
+        }
+        if (!isset($_ENV['DB_HOST'])) {
+            $_ENV['DB_HOST'] = $envValues['DB_HOST'] ?? '127.0.0.1';
+        }
+        if (!isset($_SERVER['DB_HOST'])) {
+            $_SERVER['DB_HOST'] = $envValues['DB_HOST'] ?? '127.0.0.1';
+        }
+        if (!isset($_ENV['DB_PORT'])) {
+            $_ENV['DB_PORT'] = $envValues['DB_PORT'] ?? '3306';
+        }
+        if (!isset($_SERVER['DB_PORT'])) {
+            $_SERVER['DB_PORT'] = $envValues['DB_PORT'] ?? '3306';
+        }
+        if (!isset($_ENV['DB_DATABASE'])) {
+            $_ENV['DB_DATABASE'] = $envValues['DB_DATABASE'] ?? 'laravel';
+        }
+        if (!isset($_SERVER['DB_DATABASE'])) {
+            $_SERVER['DB_DATABASE'] = $envValues['DB_DATABASE'] ?? 'laravel';
+        }
+        if (!isset($_ENV['DB_USERNAME'])) {
+            $_ENV['DB_USERNAME'] = $envValues['DB_USERNAME'] ?? 'root';
+        }
+        if (!isset($_SERVER['DB_USERNAME'])) {
+            $_SERVER['DB_USERNAME'] = $envValues['DB_USERNAME'] ?? 'root';
+        }
+        if (!isset($_ENV['DB_PASSWORD'])) {
+            $_ENV['DB_PASSWORD'] = $envValues['DB_PASSWORD'] ?? '';
+        }
+        if (!isset($_SERVER['DB_PASSWORD'])) {
+            $_SERVER['DB_PASSWORD'] = $envValues['DB_PASSWORD'] ?? '';
+        }
 
-        // 現在呼叫 parent::setUp()，Laravel 會使用我們剛剛設定的 MySQL 參數
+        // 現在呼叫 parent::setUp()，Laravel 會使用正確的環境變數
         parent::setUp();
     }
 
