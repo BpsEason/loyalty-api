@@ -4,9 +4,16 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CustomerController;
 
+use Illuminate\Support\Facades\Broadcast;
+
 Route::prefix('v1')->group(function () {
     // 套用API速率限制
     Route::middleware('throttle:api')->group(function () {
+        // 專門為API客戶端提供的broadcasting auth端點，使用JWT認證
+        Route::post('/broadcasting/auth', function () {
+            return Broadcast::auth(request());
+        })->middleware(['auth:api', 'tenant']);
+
         // Auth routes
         Route::prefix('auth')->group(function () {
             Route::post('login', [AuthController::class, 'login']);

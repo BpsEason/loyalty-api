@@ -35,8 +35,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // 註冊 Broadcast 頻道路由
-        Broadcast::routes();
+        // 註冊 Broadcast 頻道路由，加入api middleware以支援JWT token認證
+        Broadcast::routes(['middleware' => ['api', 'auth:api']]);
 
         // 載入自訂的頻道授權定義
         require base_path('routes/channels.php');
