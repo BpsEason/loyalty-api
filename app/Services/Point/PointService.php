@@ -132,7 +132,13 @@ class PointService
         int $amountDelta,
         int $balanceAfter
     ): void {
-        try {
+        DB::afterCommit(function () use (
+            $tenantId,
+            $customerId,
+            $transactionId,
+            $amountDelta,
+            $balanceAfter
+        ) {
             PointsUpdated::dispatch(
                 $tenantId,
                 $customerId,
@@ -140,9 +146,7 @@ class PointService
                 $amountDelta,
                 $balanceAfter
             );
-        } catch (\Throwable $e) {
-            report($e);
-        }
+        });
     }
 
     public function earn(Customer $customer, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
