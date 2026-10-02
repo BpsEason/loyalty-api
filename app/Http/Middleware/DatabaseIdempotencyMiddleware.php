@@ -52,65 +52,57 @@ class DatabaseIdempotencyMiddleware
      */
     protected function processIdempotentRequest(Request $request, Closure $next, int $tenantId, string $idempotencyKey, string $requestHash): Response
     {
-        // 使用資料庫事務確保冪等性記錄的原子性
-        return DB::transaction(function () use ($request, $next, $tenantId, $idempotencyKey, $requestHash) {
-            // 先查詢是否存在現有記錄，使用lockForUpdate避免並發競爭
-            /** @var IdempotencyKey|null $record */
+        // 1. 先用短 transaction 處理冪等性記錄（只做 lock + create）
+        $record = DB::transaction(function () use ($tenantId, $idempotencyKey, $requestHash) {
             $record = IdempotencyKey::where('tenant_id', $tenantId)
                 ->where('idempotency_key', $idempotencyKey)
                 ->lockForUpdate()
                 ->first();
 
-            // 如果記錄存在，處理各種狀況
             if ($record) {
-                return $this->handleExistingRecord($record, $requestHash);
+                return $record; // 已存在，交給後面處理
             }
 
-            // 記錄不存在，建立新的processing狀態記錄
-            /** @var IdempotencyKey $record */
-            $record = IdempotencyKey::create([
+            return IdempotencyKey::create([
                 'tenant_id' => $tenantId,
                 'idempotency_key' => $idempotencyKey,
                 'request_hash' => $requestHash,
                 'status' => IdempotencyKey::STATUS_PROCESSING,
                 'started_at' => now(),
             ]);
+        });
 
-            try {
-                // 執行實際請求
-                /** @var Response $response */
-                $response = $next($request);
+        // 2. 如果已存在，直接走既有邏輯（不再包大 transaction）
+        if ($record->status !== IdempotencyKey::STATUS_PROCESSING || $record->wasRecentlyCreated === false) {
+            return $this->handleExistingRecord($record, $requestHash);
+        }
 
-                // 請求成功完成，更新記錄狀態
+        // 3. 執行實際業務（PointService 自己管理 transaction）
+        try {
+            $response = $next($request);
+
+            // 4. 業務成功後，再短 transaction 更新狀態
+            DB::transaction(function () use ($record, $response) {
                 $record->update([
                     'status' => IdempotencyKey::STATUS_COMPLETED,
                     'response_body' => $response->getContent(),
                     'response_status' => $response->getStatusCode(),
                 ]);
+            });
 
-                return $response;
-            } catch (UniqueConstraintViolationException $e) {
-                // 併發場景下，另一個請求先插入了相同的冪等性鍵，此時查詢現有記錄並返回
-                $existingRecord = IdempotencyKey::where('tenant_id', $tenantId)
-                    ->where('idempotency_key', $idempotencyKey)
-                    ->lockForUpdate()
-                    ->firstOrFail();
-
-                return $this->handleExistingRecord($existingRecord, $requestHash);
-            } catch (\Exception $e) {
-                // 請求失敗，標記記錄為失敗
+            return $response;
+        } catch (\Throwable $e) {
+            // 業務失敗，標記 failed
+            DB::transaction(function () use ($record, $e) {
                 $record->update([
                     'status' => IdempotencyKey::STATUS_FAILED,
-                    'response_body' => json_encode([
-                        'error' => $e->getMessage(),
-                        'message' => '請求處理失敗'
-                    ]),
+                    'response_body' => json_encode(['error' => $e->getMessage()]),
                     'response_status' => 500,
                 ]);
+            });
 
-                throw $e;
-            }
-        }, 3); // 加入死鎖重試
+            throw $e;
+        }
     }
 
     /**

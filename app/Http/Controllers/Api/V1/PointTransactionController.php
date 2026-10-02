@@ -67,7 +67,7 @@ class PointTransactionController extends Controller
             return ApiResponse::error('Customer not found', null, [], 404);
         }
 
-        $perPage = min((int) $request->input('per_page', 15), 100);
+        $perPage = min((int) $request->input('per_page', 15), 1000);
         $query = $customer->pointTransactions();
 
         // 按交易類型過濾

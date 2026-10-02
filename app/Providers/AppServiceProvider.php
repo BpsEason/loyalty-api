@@ -62,6 +62,9 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('api', function ($request) {
+            if (app()->environment('local', 'testing')) {
+                return Limit::perMinute(1000)->by($request->user()?->id ?: $request->ip());
+            }
             return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
         });
 
