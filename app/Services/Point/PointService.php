@@ -4,6 +4,9 @@ namespace App\Services\Point;
 
 use App\Events\PointEarned;
 use App\Events\PointRedeemed;
+use App\Events\PointRefunded;
+use App\Events\PointAdjusted;
+use App\Events\PointExpired;
 use App\Events\PointsUpdated;
 use App\Models\Customer;
 use App\Models\PointAccount;
@@ -388,6 +391,15 @@ class PointService
                 ]);
             }
 
+            $this->outboxService->recordDomainEvent(new PointAdjusted(
+                $account->tenant_id,
+                $account->customer_id,
+                $transaction->id,
+                $amount,
+                $reference,
+                now()->toIso8601String()
+            ));
+
             return $transaction;
         });
 
@@ -470,6 +482,15 @@ class PointService
                 'origin_transaction_id' => $transaction->id,
             ]);
 
+            $this->outboxService->recordDomainEvent(new PointRefunded(
+                $account->tenant_id,
+                $account->customer_id,
+                $transaction->id,
+                $amount,
+                $reference,
+                now()->toIso8601String()
+            ));
+
             return $transaction;
         });
 
@@ -528,6 +549,15 @@ class PointService
                 null
             );
 
+            $this->outboxService->recordDomainEvent(new PointExpired(
+                $account->tenant_id,
+                $account->customer_id,
+                $transaction->id,
+                $totalExpireAmount,
+                null,
+                now()->toIso8601String()
+            ));
+
             return [$totalExpireAmount, $transaction];
         });
 
@@ -570,9 +600,10 @@ class PointService
                 }
 
                 $expireFromLot = min($lot->remaining_points, $remainingToExpire);
+                $newRemaining = $lot->remaining_points - $expireFromLot;
                 $lot->update([
-                    'remaining_points' => $lot->remaining_points - $expireFromLot,
-                    'expired_at' => ($lot->remaining_points - $expireFromLot) <= 0 ? now() : $lot->expired_at,
+                    'remaining_points' => $newRemaining,
+                    'expired_at' => now(),
                 ]);
                 $remainingToExpire -= $expireFromLot;
             }
@@ -601,6 +632,15 @@ class PointService
                 $reference,
                 $createdBy
             );
+
+            $this->outboxService->recordDomainEvent(new PointExpired(
+                $account->tenant_id,
+                $account->customer_id,
+                $transaction->id,
+                $amount,
+                $reference,
+                now()->toIso8601String()
+            ));
 
             return $transaction;
         });

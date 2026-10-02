@@ -295,6 +295,24 @@ Domain/Business Transaction
 - idempotency protection
 - processed state
 
+## 4.4 Point Domain Events 設計
+
+PointService 定義了五種核心 Domain Event，用於表達所有影響點數餘額的業務行為：
+
+- **PointEarned**：取得點數
+- **PointRedeemed**：兌換/消耗點數
+- **PointRefunded**：退款點數
+- **PointAdjusted**：人工或系統調整點數
+- **PointExpired**：點數到期
+
+### 設計目的
+
+1. 表達重要的 Point Domain 業務行為，精確對應所有實際會改變點數狀態的操作
+2. 統一透過 Outbox 記錄，確保業務交易與事件發送的原子性，實現可靠的事件處理
+3. 下游的通知系統、第三方整合、審計日誌等功能可透過事件監聽實現，不需要直接耦合 PointService
+
+遵循 DDD Lite 原則：這些 Domain Event 是為了真實表達業務行為而存在，不是為了套用 Design Pattern 而增加的抽象層。
+
 ---
 
 # 5. Database-First Idempotency

@@ -57,7 +57,7 @@ class ProcessOutboxEvent implements ShouldQueue
             }
 
             // 標記事件為已處理
-            DB::transaction(function () {
+            DB::transaction(function () use ($idempotencyKey) {
                 $this->outboxEvent->markAsProcessed();
 
                 // 更新冪等性鍵狀態
@@ -151,6 +151,30 @@ class ProcessOutboxEvent implements ShouldQueue
                 $payload['reference'] ?? null,
                 $payload['occurred_at']
             ),
+            'PointRefunded' => new \App\Events\PointRefunded(
+                $payload['tenant_id'],
+                $payload['customer_id'],
+                $payload['point_transaction_id'],
+                $payload['points'],
+                $payload['reference'] ?? null,
+                $payload['occurred_at']
+            ),
+            'PointAdjusted' => new \App\Events\PointAdjusted(
+                $payload['tenant_id'],
+                $payload['customer_id'],
+                $payload['point_transaction_id'],
+                $payload['points'],
+                $payload['reference'] ?? null,
+                $payload['occurred_at']
+            ),
+            'PointExpired' => new \App\Events\PointExpired(
+                $payload['tenant_id'],
+                $payload['customer_id'],
+                $payload['point_transaction_id'],
+                $payload['points'],
+                $payload['reference'] ?? null,
+                $payload['occurred_at']
+            ),
             'CouponClaimed' => new \App\Events\CouponClaimed(
                 $payload['tenant_id'],
                 $payload['customer_id'],
@@ -187,6 +211,9 @@ class ProcessOutboxEvent implements ShouldQueue
         $map = [
             'PointEarned' => \App\Events\PointEarned::class,
             'PointRedeemed' => \App\Events\PointRedeemed::class,
+            'PointRefunded' => \App\Events\PointRefunded::class,
+            'PointAdjusted' => \App\Events\PointAdjusted::class,
+            'PointExpired' => \App\Events\PointExpired::class,
             'CouponClaimed' => \App\Events\CouponClaimed::class,
             'CouponRedeemed' => \App\Events\CouponRedeemed::class,
             'RewardGranted' => \App\Events\RewardGranted::class,
