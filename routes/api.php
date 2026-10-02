@@ -10,8 +10,37 @@ Route::prefix('v1')->group(function () {
     // 套用API速率限制
     Route::middleware('throttle:api')->group(function () {
         // 專門為API客戶端提供的broadcasting auth端點，使用JWT認證
-        Route::post('/broadcasting/auth', function () {
-            return Broadcast::auth(request());
+        Route::post('/broadcasting/auth', function (\Illuminate\Http\Request $request) {
+            // 1. 先嘗試標準方式讀取
+            $channelName = $request->input('channel_name') ?? $request->query('channel_name');
+            $socketId = $request->input('socket_id') ?? $request->query('socket_id');
+
+            // 2. 如果為空，嘗試從 raw content 解析（防止 Middleware 清空 request stream）
+            if (!$channelName) {
+                $rawBody = file_get_contents('php://input');
+                $jsonData = json_decode($rawBody, true) ?? [];
+
+                if (is_array($jsonData)) {
+                    $channelName = $jsonData['channel_name'] ?? null;
+                    $socketId = $jsonData['socket_id'] ?? null;
+                }
+            }
+
+            if (!$channelName) {
+                return response()->json([
+                    'message' => 'Missing channel_name parameter',
+                    'received_data' => $request->all(),
+                    'raw_content' => file_get_contents('php://input'),
+                ], 400);
+            }
+
+            // 將補抓到的參數重新塞回 Request
+            $request->merge([
+                'channel_name' => $channelName,
+                'socket_id' => $socketId,
+            ]);
+
+            return Broadcast::auth($request);
         })->middleware(['auth:api', 'tenant']);
 
         // Auth routes
