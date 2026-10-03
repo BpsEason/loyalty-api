@@ -3,6 +3,11 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToTenant;
+use App\Services\Coupon\States\CouponState;
+use App\Services\Coupon\States\AvailableState;
+use App\Services\Coupon\States\UsedState;
+use App\Services\Coupon\States\ExpiredState;
+use App\Services\Coupon\States\CancelledState;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -107,5 +112,19 @@ class UserCoupon extends Model
         }
 
         return $discount;
+    }
+
+    /**
+     * 取得當前狀態對應的State物件
+     */
+    public function state(): CouponState
+    {
+        return match ($this->status) {
+            self::STATUS_AVAILABLE => new AvailableState($this),
+            self::STATUS_USED => new UsedState($this),
+            self::STATUS_EXPIRED => new ExpiredState($this),
+            self::STATUS_CANCELLED => new CancelledState($this),
+            default => throw new \RuntimeException('未知的優惠券狀態'),
+        };
     }
 }

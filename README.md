@@ -158,9 +158,11 @@ UNIQUE (tenant_id, idempotency_key)
 | Problem | Design Decision | Pattern |
 |---|---|---|
 | 點數計算規則可能持續增加或變動 | 將點數計算與核心交易流程分離 | Strategy |
+| Coupon 狀態轉換有明確的規則與限制 | 將狀態判斷與轉換邏輯從服務中抽離 | State |
 | 業務事件需要與核心交易流程解耦 | 使用 Domain Event 表達業務事實 | Domain Event |
 | DB Transaction 與事件可靠投遞需要一致性 | 使用 Outbox 保存待處理事件 | Outbox |
 | Event 後續行為需要與 Domain 解耦 | 使用 Event Listener / Worker 消費事件 | Observer / Listener |
+| 建立不同類型的點數交易物件 | 使用工廠模式建立對應的交易實體 | Factory |
 
 ### Point Domain Strategy Pattern 實作說明
 
@@ -171,17 +173,26 @@ PointService
     ↓
 PointEarnStrategy
     ↓
-calculate points
+Calculate Points
     ↓
 PointService
     ↓
-DB Transaction / PointAccount / PointLot
+DB Transaction
+    ↓
+PointAccount / PointLot / PointTransaction
     ↓
 Domain Event / Outbox
 ```
 
 **責任劃分**：
-> Strategy 負責「算多少點」，PointService 負責「如何安全地完成 Point Transaction」。
+- **Strategy 負責**：算多少點
+- **PointService 負責**：如何安全地完成 Point Transaction
+
+**Strategy 不負責**：
+- DB transaction
+- Redis lock
+- PointAccount / PointLot persistence
+- Event / Outbox
 
 **設計原因**：
 點數計算規則屬於較高變動的業務邏輯，因此將其與 PointService 的交易一致性流程分離。未來新增不同的 earning rule 時，可以增加新的 Strategy，而不需要修改 Redis Lock、DB Transaction、PointAccount、PointLot、Domain Event 與 Outbox 的核心流程。
@@ -208,6 +219,97 @@ flowchart TD
     H --> I[ProcessOutboxEvent]
     I --> J[Event Listener / Integration]
 ```
+
+### State Pattern — Coupon Domain
+
+Coupon 本身具有明確的狀態集合與狀態轉換規則，因此將狀態轉換責任從 Coupon Service 中抽離，避免狀態判斷隨業務增加而持續累積。
+
+**目前實際存在的 Coupon status**：
+```text
+available
+used
+expired
+cancelled
+```
+
+**目前實際使用的合法 transition**：
+```text
+available → used
+```
+
+**狀態轉換流程**：
+```text
+available
+    ↓ redeem()
+used
+```
+
+其他已結束或不可再操作的狀態（used、expired、cancelled）不得再次執行核銷。
+
+**State Pattern 責任邊界**：
+
+```text
+CouponService
+    │
+    │ Transaction / Lock / Persistence
+    ▼
+UserCoupon
+    │
+    ▼
+CouponState
+    │
+    ├── AvailableState
+    ├── UsedState
+    ├── ExpiredState
+    └── CancelledState
+```
+
+**State 負責**：
+- 判斷目前狀態是否允許操作
+- 定義合法狀態轉換
+- 回傳下一個狀態
+
+**State 不負責**：
+- DB Transaction
+- Redis Lock
+- `lockForUpdate()`
+- Eloquent Persistence
+- Event Dispatch
+- Outbox
+
+**CouponService 負責**：
+- Transaction
+- Concurrency Control
+- Tenant Isolation
+- Idempotency
+- Persistence
+- Event / Outbox
+
+### Design Pattern Philosophy
+
+本專案不以「使用越多 Design Pattern 越好」為目標。
+
+採用 Pattern 的判斷原則：
+
+```text
+Domain Problem
+      ↓
+Current Design Complexity
+      ↓
+Pattern provides clear benefit
+      ↓
+Smallest reasonable abstraction
+      ↓
+Tests verify behavior
+```
+
+> Pattern 必須解決實際 Domain 問題；如果現有程式碼沒有足夠複雜度，就不為了展示 Pattern 而新增抽象層。
+
+核心價值：
+- Small Diff：最小化修改範圍
+- Low Coupling：降低模組間的耦合度
+- Small Regression Scope：減少回歸測試的影響範圍
+- Avoid Over Engineering：避免過度設計
 
 ---
 
@@ -1101,6 +1203,7 @@ Queue 延遲
 |                   | 退款邏輯                          | ✅ Implemented                         |
 |                   | 點數過期邏輯                      | 🚧 In Progress                         |
 |                   | 點數調整邏輯                      | ✅ Implemented                         |
+|                   | 優惠券狀態轉換正確性              | ✅ Implemented                         |
 | **Isolation**     | 租戶隔離測試                      | ✅ Implemented                         |
 |                   | Super Admin 跨租戶存取            | ✅ Implemented                         |
 |                   | 租戶管理員權限                    | ✅ Implemented                         |
@@ -1118,6 +1221,18 @@ Queue 延遲
 | **Performance**   | EXPLAIN ANALYZE 驗證              | ❌ Not Measured                        |
 |                   | 負載測試                          | ❌ Not Measured                        |
 |                   | 大資料集基準測試                  | ❌ Not Measured                        |
+
+### 相關測試檔案
+
+```text
+CouponApiTest
+CouponRedemptionHistoryApiTest
+CouponStateTransitionTest
+
+40 tests
+168 assertions
+All passed
+```
 
 ---
 

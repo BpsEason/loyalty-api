@@ -137,14 +137,18 @@ class CouponService
                 throw new RuntimeException('優惠券不屬於此客戶');
             }
 
+            // 先檢查是否可以核銷（保留原有的日期和模板有效性檢查）
             if (!$userCoupon->isRedeemable()) {
                 throw new RuntimeException('優惠券無法使用，可能已過期或已使用');
             }
 
+            // 使用State Pattern檢查狀態轉換是否合法
+            $newStatus = $userCoupon->state()->redeem();
+
             $discountAmount = $userCoupon->calculateDiscount($orderAmount);
 
             $userCoupon->update([
-                'status' => UserCoupon::STATUS_USED,
+                'status' => $newStatus,
                 'used_at' => now(),
                 'reference' => $reference,
             ]);
@@ -359,17 +363,20 @@ class CouponService
                     /** @var UserCoupon $userCoupon */
                     $userCoupon = UserCoupon::where('id', $userCoupon->id)->lockForUpdate()->firstOrFail();
 
-                    // 檢查是否可以核銷
+                    // 先檢查是否可以核銷（保留原有的日期和模板有效性檢查）
                     if (!$userCoupon->isRedeemable()) {
                         throw new RuntimeException('優惠券無法使用，可能已過期或已使用');
                     }
+
+                    // 使用State Pattern檢查狀態轉換是否合法
+                    $newStatus = $userCoupon->state()->redeem();
 
                     // 計算折扣金額
                     $discountAmount = $orderAmount ? $userCoupon->calculateDiscount($orderAmount) : 0;
 
                     // 更新優惠券狀態為已使用
                     $userCoupon->update([
-                        'status' => UserCoupon::STATUS_USED,
+                        'status' => $newStatus,
                         'used_at' => now(),
                         'reference' => $reference,
                     ]);
