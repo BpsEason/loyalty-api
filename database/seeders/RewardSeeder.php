@@ -585,15 +585,31 @@ class RewardSeeder extends Seeder
                 try {
                     if ($txConfig['type'] === PointTransaction::TYPE_EARN) {
                         $tx = $this->pointService->earn($customer, $txConfig['amount'], $txConfig['description']);
+                        // 同時更新PointLot的earned_at和PointTransaction的created_at，確保時間一致性
+                        $lot = \App\Models\PointLot::where('origin_transaction_id', $tx->id)->first();
+                        if ($lot) {
+                            $lot->earned_at = $txDate;
+                            $lot->save();
+                        }
+                        $tx->update(['created_at' => $txDate]);
+                        $stats['historical_transactions_created']++;
                     } elseif ($txConfig['type'] === PointTransaction::TYPE_REDEEM) {
                         $tx = $this->pointService->redeem($customer, $txConfig['amount'], $txConfig['description']);
+                        $tx->update(['created_at' => $txDate]);
+                        $stats['historical_transactions_created']++;
                     } else {
                         $tx = $this->pointService->adjust($customer, $txConfig['amount'], $txConfig['description']);
+                        // 如果是正數調整，同樣需要更新對應的PointLot時間
+                        if ($txConfig['amount'] > 0) {
+                            $lot = \App\Models\PointLot::where('origin_transaction_id', $tx->id)->first();
+                            if ($lot) {
+                                $lot->earned_at = $txDate;
+                                $lot->save();
+                            }
+                        }
+                        $tx->update(['created_at' => $txDate]);
+                        $stats['historical_transactions_created']++;
                     }
-
-                    // 修改交易的建立時間，使其符合歷史時間軸
-                    $tx->update(['created_at' => $txDate]);
-                    $stats['historical_transactions_created']++;
                 } catch (RuntimeException $e) {
                     // 忽略餘額不足等錯誤，繼續處理
                     continue;

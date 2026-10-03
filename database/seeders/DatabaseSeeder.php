@@ -290,55 +290,206 @@ class DatabaseSeeder extends Seeder
 
             /*
              * ========================================================
-             * 5. 建立 Point Accounts
+             * 5. 建立 Point Accounts 與正確的 PointLot / PointTransaction
              * ========================================================
+             * 使用 PointService::earn() 確保所有 Point Domain 資料一致性
              */
-            $balances = $index === 0
-                ? [
-                    1000,
-                    2500,
-                    500,
-                    3200,
-                    800,
-                ]
-                : [
-                    1500,
-                    400,
-                    2800,
-                    700,
-                    5000,
-                ];
+            $pointService = app(\App\Services\Point\PointService::class);
 
+            // 為每個客戶建立固定的點數批次，用於驗證 FIFO 和過期功能
             foreach ($customers as $customerIndex => $customer) {
-                $balance = $balances[$customerIndex];
-
+                // 先確保 PointAccount 存在
                 $pointAccount = PointAccount::firstOrCreate(
                     [
                         'tenant_id' => $tenant->id,
                         'customer_id' => $customer->id,
                     ],
                     [
-                        'balance' => $balance,
-                        'total_earned' => $balance,
+                        'balance' => 0,
+                        'total_earned' => 0,
                         'total_redeemed' => 0,
                     ]
                 );
 
-                /*
-                 * ====================================================
-                 * 6. 建立 Demo Point Transactions
-                 * ====================================================
-                 *
-                 * 只為第一個 Customer 建立歷史交易，
-                 * 讓 API Demo 有實際的 transaction history。
-                 */
-                if ($customerIndex === 0) {
-                    $this->createSampleTransactions(
-                        tenant: $tenant,
-                        customer: $customer,
-                        pointAccount: $pointAccount,
-                        createdById: $tenantAdmin->id
-                    );
+                // 只為有需要的客戶補齊點數，避免重複執行時累積
+                if ($pointAccount->balance === 0) {
+                    // 根據客戶索引和租戶類型，建立對應的點數場景
+                    $tenantDomain = $tenant->domain;
+                    $pointTransactions = [];
+
+                    // 每個租戶的第一個客戶（高活躍VIP會員）：用於展示FIFO功能
+                    if ($customerIndex === 0) {
+                        // 為所有租戶的第一個客戶建立FIFO演示的多個時間點點數批次
+                        $fifoTransactions = [
+                            // 30天前：百貨周年慶消費賺取500點 - 已過期
+                            ['date' => '2026-09-03', 'amount' => 500, 'description' => $tenantDomain === 'retail.localhost' ? '周年慶消費累積' : ($tenantDomain === 'coffee.localhost' ? '夏季冰品活動消費' : '年度健身挑戰參與'), 'expire' => '2026-09-23'],
+                            // 20天前：日常消費賺取1000點 - 剩餘200點（已消耗800）
+                            ['date' => '2026-09-13', 'amount' => 1000, 'description' => $tenantDomain === 'retail.localhost' ? '日用百貨消費累積' : ($tenantDomain === 'coffee.localhost' ? '早餐組合消費累積' : '拳擊課程報名'), 'expire' => null],
+                            // 10天前：促銷活動賺取2000點 - 全數剩餘
+                            ['date' => '2026-09-23', 'amount' => 2000, 'description' => $tenantDomain === 'retail.localhost' ? '中秋節預購消費' : ($tenantDomain === 'coffee.localhost' ? '新產品試飲活動' : '瑜伽課程套票購買'), 'expire' => null],
+                            // 今天：最近消費賺取2000點 - 全數剩餘
+                            ['date' => '2026-10-03', 'amount' => 2000, 'description' => $tenantDomain === 'retail.localhost' ? '國慶檔期消費' : ($tenantDomain === 'coffee.localhost' ? '國慶優惠套餐消費' : '國慶健身挑戰營參與'), 'expire' => null],
+                        ];
+                        $pointTransactions = $fifoTransactions;
+
+                        // 檢查是否已經建立過這些交易，避免重複執行重複建立
+                        $existingLots = \App\Models\PointLot::where('customer_id', $customer->id)->count();
+                        if ($existingLots === 0) {
+                            foreach ($pointTransactions as $txData) {
+                                $earnedAt = \Carbon\Carbon::parse($txData['date']);
+                                $tx = $pointService->earn($customer, $txData['amount'], $txData['description']);
+                                // 更新PointLot的時間
+                                $lot = \App\Models\PointLot::where('origin_transaction_id', $tx->id)->first();
+                                if ($lot) {
+                                    $lot->earned_at = $earnedAt;
+                                    if (!empty($txData['expire'])) {
+                                        $lot->expired_at = \Carbon\Carbon::parse($txData['expire']);
+                                    }
+                                    $lot->save();
+                                }
+                                // 更新交易的建立時間
+                                $tx->created_at = $earnedAt;
+                                $tx->save();
+                            }
+
+                            // 執行一次redeem，消耗800點，展示FIFO機制：從最早的有效批次（2026-09-13的1000點）扣除
+                            try {
+                                $pointService->redeem($customer, 800, $tenantDomain === 'retail.localhost' ? '家電消費兌換點數' : ($tenantDomain === 'coffee.localhost' ? '季卡兌換點數' : '健身周邊商品兌換'));
+                            } catch (\RuntimeException $e) {
+                                // 忽略重複執行的錯誤
+                            }
+
+                            // 處理所有已過期的點數，確保帳戶餘額與有效點數一致
+                            try {
+                                $pointService->expireAllExpiredLots($customer);
+                            } catch (\RuntimeException $e) {
+                                // 忽略沒有過期點數的情況
+                            }
+                        }
+                    }
+                    // 每個租戶的第二個客戶（一般會員）：建立基本點數
+                    elseif ($customerIndex === 1) {
+                        $normalTransactions = [
+                            ['date' => '2026-09-20', 'amount' => 2500, 'description' => '日常消費累積點數', 'expire' => null],
+                        ];
+                        $pointTransactions = $normalTransactions;
+
+                        // 檢查是否已有點數，避免重複建立
+                        $existingAccount = PointAccount::where('customer_id', $customer->id)->first();
+                        if (!$existingAccount || $existingAccount->balance === 0) {
+                            foreach ($pointTransactions as $txData) {
+                                $earnedAt = \Carbon\Carbon::parse($txData['date']);
+                                $tx = $pointService->earn($customer, $txData['amount'], $txData['description']);
+                                $lot = \App\Models\PointLot::where('origin_transaction_id', $tx->id)->first();
+                                if ($lot) {
+                                    $lot->earned_at = $earnedAt;
+                                    if (!empty($txData['expire'])) {
+                                        $lot->expired_at = \Carbon\Carbon::parse($txData['expire']);
+                                    }
+                                    $lot->save();
+                                }
+                                $tx->created_at = $earnedAt;
+                                $tx->save();
+                            }
+
+                            // 處理所有已過期的點數，確保帳戶餘額與有效點數一致
+                            try {
+                                $pointService->expireAllExpiredLots($customer);
+                            } catch (\RuntimeException $e) {
+                                // 忽略沒有過期點數的情況
+                            }
+                        }
+                    }
+                    // 每個租戶的第三個客戶（即將過期/即將失效會員）：用於展示點數過期功能
+                    elseif ($customerIndex === 2) {
+                        $expiryTransactions = [
+                            // 已過期的點數批次
+                            ['date' => '2026-08-01', 'amount' => 300, 'description' => '年初消費累積', 'expire' => '2026-09-30'],
+                            // 即將過期的點數批次（5天後過期）
+                            ['date' => '2026-09-28', 'amount' => 800, 'description' => '上月消費累積', 'expire' => '2026-10-08'],
+                            // 有效點數批次
+                            ['date' => '2026-10-01', 'amount' => 1200, 'description' => '本月消費累積', 'expire' => '2027-04-01'],
+                        ];
+                        $pointTransactions = $expiryTransactions;
+
+                        $existingAccount = PointAccount::where('customer_id', $customer->id)->first();
+                        if (!$existingAccount || $existingAccount->balance === 0) {
+                            foreach ($pointTransactions as $txData) {
+                                $earnedAt = \Carbon\Carbon::parse($txData['date']);
+                                $tx = $pointService->earn($customer, $txData['amount'], $txData['description']);
+                                $lot = \App\Models\PointLot::where('origin_transaction_id', $tx->id)->first();
+                                if ($lot) {
+                                    $lot->earned_at = $earnedAt;
+                                    if (!empty($txData['expire'])) {
+                                        $lot->expired_at = \Carbon\Carbon::parse($txData['expire']);
+                                    }
+                                    $lot->save();
+                                }
+                                $tx->created_at = $earnedAt;
+                                $tx->save();
+                            }
+
+                            // 處理所有已過期的點數，確保帳戶餘額與有效點數一致
+                            try {
+                                $pointService->expireAllExpiredLots($customer);
+                            } catch (\RuntimeException $e) {
+                                // 忽略沒有過期點數的情況
+                            }
+                        }
+                    }
+                    // 每個租戶的第四個客戶（新進會員）：只有少量點數，展示新會員場景
+                    elseif ($customerIndex === 3) {
+                        $newMemberTransactions = [
+                            ['date' => '2026-09-30', 'amount' => 300, 'description' => '首次註冊歡迎點數', 'expire' => null],
+                        ];
+                        $pointTransactions = $newMemberTransactions;
+
+                        $existingAccount = PointAccount::where('customer_id', $customer->id)->first();
+                        if (!$existingAccount || $existingAccount->balance === 0) {
+                            foreach ($pointTransactions as $txData) {
+                                $earnedAt = \Carbon\Carbon::parse($txData['date']);
+                                $tx = $pointService->earn($customer, $txData['amount'], $txData['description']);
+                                $lot = \App\Models\PointLot::where('origin_transaction_id', $tx->id)->first();
+                                if ($lot) {
+                                    $lot->earned_at = $earnedAt;
+                                    if (!empty($txData['expire'])) {
+                                        $lot->expired_at = \Carbon\Carbon::parse($txData['expire']);
+                                    }
+                                    $lot->save();
+                                }
+                                $tx->created_at = $earnedAt;
+                                $tx->save();
+                            }
+                        }
+                    }
+                    // 每個租戶的第五個客戶（沉睡會員）：有歷史點數但長時間未活躍，展示沉睡會員場景
+                    elseif ($customerIndex === 4) {
+                        $dormantTransactions = [
+                            // 半年前的歷史點數，部分已過期
+                            ['date' => '2026-04-01', 'amount' => 1500, 'description' => '年度會員回饋點數', 'expire' => '2026-09-30'],
+                            // 最後一次消費的點數，3個月前
+                            ['date' => '2026-07-03', 'amount' => 800, 'description' => '最後一次消費累積', 'expire' => '2027-01-03'],
+                        ];
+                        $pointTransactions = $dormantTransactions;
+
+                        $existingAccount = PointAccount::where('customer_id', $customer->id)->first();
+                        if (!$existingAccount || $existingAccount->balance === 0) {
+                            foreach ($pointTransactions as $txData) {
+                                $earnedAt = \Carbon\Carbon::parse($txData['date']);
+                                $tx = $pointService->earn($customer, $txData['amount'], $txData['description']);
+                                $lot = \App\Models\PointLot::where('origin_transaction_id', $tx->id)->first();
+                                if ($lot) {
+                                    $lot->earned_at = $earnedAt;
+                                    if (!empty($txData['expire'])) {
+                                        $lot->expired_at = \Carbon\Carbon::parse($txData['expire']);
+                                    }
+                                    $lot->save();
+                                }
+                                $tx->created_at = $earnedAt;
+                                $tx->save();
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -377,38 +528,181 @@ class DatabaseSeeder extends Seeder
         string $tenantName,
         string $tenantLetter
     ): Collection {
-        $customerSeeds = [
-            [
-                'name' => "Customer {$tenantName}1",
-                'email' => "customer{$tenantLetter}1@example.com",
-                'phone' => '0911000001',
-                'tier' => 'gold',
+        // 根據租戶類型建立對應的業務故事客戶
+        $customerSeeds = match ($tenant->domain) {
+            'retail.localhost' => [
+                // Retail 零售租戶的客戶persona
+                [
+                    'name' => '陳美玲',
+                    'email' => "customer{$tenantLetter}1@example.com",
+                    'phone' => '0911000001',
+                    'tier' => 'platinum',
+                    'persona' => 'VIP高活躍會員',
+                    'description' => '百貨公司高消費會員，每月固定消費，有大量歷史點數累積'
+                ],
+                [
+                    'name' => '王大偉',
+                    'email' => "customer{$tenantLetter}2@example.com",
+                    'phone' => '0911000002',
+                    'tier' => 'gold',
+                    'persona' => '一般會員',
+                    'description' => '偶爾消費的中等活躍會員'
+                ],
+                [
+                    'name' => '林小芳',
+                    'email' => "customer{$tenantLetter}3@example.com",
+                    'phone' => '0911000003',
+                    'tier' => 'silver',
+                    'persona' => '即將過期會員',
+                    'description' => '有即將過期的點數，需要喚回'
+                ],
+                [
+                    'name' => '張建國',
+                    'email' => "customer{$tenantLetter}4@example.com",
+                    'phone' => '0911000004',
+                    'tier' => 'silver',
+                    'persona' => '新進會員',
+                    'description' => '剛加入的新會員'
+                ],
+                [
+                    'name' => '吳美麗',
+                    'email' => "customer{$tenantLetter}5@example.com",
+                    'phone' => '0911000005',
+                    'tier' => 'bronze',
+                    'persona' => '沉睡會員',
+                    'description' => '長時間未消費的沉睡會員'
+                ],
             ],
-            [
-                'name' => "Customer {$tenantName}2",
-                'email' => "customer{$tenantLetter}2@example.com",
-                'phone' => '0911000002',
-                'tier' => 'gold',
+            'coffee.localhost' => [
+                // Coffee 咖啡租戶的客戶persona
+                [
+                    'name' => '劉雅婷',
+                    'email' => "customer{$tenantLetter}1@example.com",
+                    'phone' => '0911555666',
+                    'tier' => 'gold',
+                    'persona' => '早餐高頻會員',
+                    'description' => '每日早上來店消費早餐的高頻會員'
+                ],
+                [
+                    'name' => '周慧雯',
+                    'email' => "customer{$tenantLetter}2@example.com",
+                    'phone' => '0933999000',
+                    'tier' => 'gold',
+                    'persona' => '生日會員',
+                    'description' => '本月生日會員，已獲得生日獎勵'
+                ],
+                [
+                    'name' => '鄭建宏',
+                    'email' => "customer{$tenantLetter}3@example.com",
+                    'phone' => '0944111222',
+                    'tier' => 'silver',
+                    'persona' => '沉睡會員',
+                    'description' => '三個月未消費的沉睡會員'
+                ],
+                [
+                    'name' => '何欣宜',
+                    'email' => "customer{$tenantLetter}4@example.com",
+                    'phone' => '0955333444',
+                    'tier' => 'silver',
+                    'persona' => '周末會員',
+                    'description' => '只有周末來店消費的會員'
+                ],
+                [
+                    'name' => '楊志偉',
+                    'email' => "customer{$tenantLetter}5@example.com",
+                    'phone' => '0922777888',
+                    'tier' => 'bronze',
+                    'persona' => '新客',
+                    'description' => '首次來店消費的新會員'
+                ],
             ],
-            [
-                'name' => "Customer {$tenantName}3",
-                'email' => "customer{$tenantLetter}3@example.com",
-                'phone' => '0911000003',
-                'tier' => 'silver',
+            'fitness.localhost' => [
+                // Fitness 健身租戶的客戶persona
+                [
+                    'name' => '曾俊傑',
+                    'email' => "customer{$tenantLetter}1@example.com",
+                    'phone' => '0911888999',
+                    'tier' => 'platinum',
+                    'persona' => '高價值VIP會員',
+                    'description' => '健身房頂級會員，長期參與各種課程'
+                ],
+                [
+                    'name' => '彭建宇',
+                    'email' => "customer{$tenantLetter}2@example.com",
+                    'phone' => '0933222333',
+                    'tier' => 'gold',
+                    'persona' => '課程消費會員',
+                    'description' => '持續報名各種健身課程的會員'
+                ],
+                [
+                    'name' => '蔡淑華',
+                    'email' => "customer{$tenantLetter}3@example.com",
+                    'phone' => '0922000111',
+                    'tier' => 'gold',
+                    'persona' => '續約會員',
+                    'description' => '剛續約年費的忠實會員'
+                ],
+                [
+                    'name' => '蘇美華',
+                    'email' => "customer{$tenantLetter}4@example.com",
+                    'phone' => '0944444555',
+                    'tier' => 'silver',
+                    'persona' => '即將失效會員',
+                    'description' => '會員資格即將到期，點數即將過期'
+                ],
+                [
+                    'name' => '鄧文彬',
+                    'email' => "customer{$tenantLetter}5@example.com",
+                    'phone' => '0955666777',
+                    'tier' => 'bronze',
+                    'persona' => '健身新手',
+                    'description' => '剛加入的健身新手'
+                ],
             ],
-            [
-                'name' => "Customer {$tenantName}4",
-                'email' => "customer{$tenantLetter}4@example.com",
-                'phone' => '0911000004',
-                'tier' => 'silver',
-            ],
-            [
-                'name' => "Customer {$tenantName}5",
-                'email' => "customer{$tenantLetter}5@example.com",
-                'phone' => '0911000005',
-                'tier' => 'bronze',
-            ],
-        ];
+            default => [
+                // 預設通用客戶
+                [
+                    'name' => "Customer {$tenantName}1",
+                    'email' => "customer{$tenantLetter}1@example.com",
+                    'phone' => '0911000001',
+                    'tier' => 'gold',
+                    'persona' => '一般會員',
+                    'description' => '通用會員'
+                ],
+                [
+                    'name' => "Customer {$tenantName}2",
+                    'email' => "customer{$tenantLetter}2@example.com",
+                    'phone' => '0911000002',
+                    'tier' => 'gold',
+                    'persona' => '一般會員',
+                    'description' => '通用會員'
+                ],
+                [
+                    'name' => "Customer {$tenantName}3",
+                    'email' => "customer{$tenantLetter}3@example.com",
+                    'phone' => '0911000003',
+                    'tier' => 'silver',
+                    'persona' => '一般會員',
+                    'description' => '通用會員'
+                ],
+                [
+                    'name' => "Customer {$tenantName}4",
+                    'email' => "customer{$tenantLetter}4@example.com",
+                    'phone' => '0911000004',
+                    'tier' => 'silver',
+                    'persona' => '一般會員',
+                    'description' => '通用會員'
+                ],
+                [
+                    'name' => "Customer {$tenantName}5",
+                    'email' => "customer{$tenantLetter}5@example.com",
+                    'phone' => '0911000005',
+                    'tier' => 'bronze',
+                    'persona' => '一般會員',
+                    'description' => '通用會員'
+                ],
+            ]
+        };
 
         $customers = collect();
 
@@ -424,6 +718,8 @@ class DatabaseSeeder extends Seeder
                     'metadata' => [
                         'member_since' => '2026-01-01',
                         'tier' => $customerData['tier'],
+                        'persona' => $customerData['persona'],
+                        'description' => $customerData['description'],
                     ],
                 ]
             );
@@ -470,51 +766,6 @@ class DatabaseSeeder extends Seeder
                 [
                     'name' => $permissionName,
                     'guard_name' => 'web',
-                ]
-            );
-        }
-    }
-
-    /**
-     * 為 Demo Customer 建立樣本交易記錄。
-     */
-    private function createSampleTransactions(
-        Tenant $tenant,
-        Customer $customer,
-        PointAccount $pointAccount,
-        int $createdById
-    ): void {
-        $transactions = [
-            [
-                'type' => PointTransaction::TYPE_EARN,
-                'amount' => 500,
-                'balance_before' => 0,
-                'balance_after' => 500,
-                'description' => '首次消費累積點數',
-            ],
-            [
-                'type' => PointTransaction::TYPE_EARN,
-                'amount' => 500,
-                'balance_before' => 500,
-                'balance_after' => 1000,
-                'description' => '二次消費累積點數',
-            ],
-        ];
-
-        foreach ($transactions as $transaction) {
-            PointTransaction::firstOrCreate(
-                [
-                    'tenant_id' => $tenant->id,
-                    'point_account_id' => $pointAccount->id,
-                    'description' => $transaction['description'],
-                ],
-                [
-                    'customer_id' => $customer->id,
-                    'type' => $transaction['type'],
-                    'amount' => $transaction['amount'],
-                    'balance_before' => $transaction['balance_before'],
-                    'balance_after' => $transaction['balance_after'],
-                    'created_by' => $createdById,
                 ]
             );
         }
