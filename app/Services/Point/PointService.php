@@ -13,6 +13,7 @@ use App\Models\PointAccount;
 use App\Models\PointLot;
 use App\Models\PointTransaction;
 use App\Services\Outbox\OutboxService;
+use App\Services\Point\Strategies\PointEarnStrategy;
 use App\Support\Tenancy\TenantResolver;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -29,6 +30,25 @@ class PointService
         protected TenantResolver $tenantResolver,
         protected OutboxService $outboxService
     ) {}
+
+    /**
+     * 使用指定的點數計算策略來獲得點數
+     * 策略模式的實作：將點數計算邏輯與核心交易流程分離
+     */
+    public function earnWithStrategy(
+        Customer $customer,
+        PointEarnStrategy $strategy,
+        int|float $baseAmount,
+        array $context = [],
+        ?string $description = null,
+        mixed $reference = null,
+        ?int $createdBy = null
+    ): PointTransaction {
+        // 使用策略計算最終應該獲得的點數
+        $amount = $strategy->calculate($customer, $baseAmount, $context);
+
+        return $this->executeEarnTransaction($customer, $amount, $description, $reference, $createdBy);
+    }
 
     protected function validatePositiveAmount(int $amount, string $errorMessage): void
     {
@@ -154,6 +174,19 @@ class PointService
 
     public function earn(Customer $customer, int $amount, ?string $description = null, mixed $reference = null, ?int $createdBy = null): PointTransaction
     {
+        return $this->executeEarnTransaction($customer, $amount, $description, $reference, $createdBy);
+    }
+
+    /**
+     * 共用的獲得點數交易流程，被 earn() 和 earnWithStrategy() 呼叫
+     */
+    protected function executeEarnTransaction(
+        Customer $customer,
+        int $amount,
+        ?string $description = null,
+        mixed $reference = null,
+        ?int $createdBy = null
+    ): PointTransaction {
         $this->validatePositiveAmount($amount, '點數必須為正數');
 
         $transaction = $this->executeWithCustomerPointStateLock($customer, function (PointAccount $account) use ($amount, $description, $reference, $createdBy, $customer) {

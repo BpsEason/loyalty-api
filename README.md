@@ -144,10 +144,70 @@ UNIQUE (tenant_id, idempotency_key)
 
 **Trade-off**：
 
-- 所有功能必須一起部署，無法獨立發布
+- 犧牲了所有功能必須一起部署，無法獨立發布
 - 單一程式碼庫隨著功能增長可能越來越龐大
 
 **Exit Criteria**：當業務邊界完全穩定、需要獨立擴展某些服務、或團隊足夠大可以維護多個服務時，考慮拆分。
+
+---
+
+## 3.4 Design Decisions 表格
+
+所有設計模式都是為了解決實際業務問題而選擇，不是為了展示 Pattern 而使用 Pattern：
+
+| Problem | Design Decision | Pattern |
+|---|---|---|
+| 點數計算規則可能持續增加或變動 | 將點數計算與核心交易流程分離 | Strategy |
+| 業務事件需要與核心交易流程解耦 | 使用 Domain Event 表達業務事實 | Domain Event |
+| DB Transaction 與事件可靠投遞需要一致性 | 使用 Outbox 保存待處理事件 | Outbox |
+| Event 後續行為需要與 Domain 解耦 | 使用 Event Listener / Worker 消費事件 | Observer / Listener |
+
+### Point Domain Strategy Pattern 實作說明
+
+針對點數賺取規則（Earn Rules）的多樣性與演變性，我們實作了 Strategy Pattern 來分離「點數計算邏輯」與「交易一致性流程」：
+
+```text
+PointService
+    ↓
+PointEarnStrategy
+    ↓
+calculate points
+    ↓
+PointService
+    ↓
+DB Transaction / PointAccount / PointLot
+    ↓
+Domain Event / Outbox
+```
+
+**責任劃分**：
+> Strategy 負責「算多少點」，PointService 負責「如何安全地完成 Point Transaction」。
+
+**設計原因**：
+點數計算規則屬於較高變動的業務邏輯，因此將其與 PointService 的交易一致性流程分離。未來新增不同的 earning rule 時，可以增加新的 Strategy，而不需要修改 Redis Lock、DB Transaction、PointAccount、PointLot、Domain Event 與 Outbox 的核心流程。
+
+**目前實作的 Strategy**：
+- `PurchaseEarnStrategy`：依消費金額及會員等級倍率計算點數
+- `CampaignEarnStrategy`：依活動倍率及 bonus points 計算點數
+- `ReferralEarnStrategy`：推薦獎勵點數
+- `VipExclusiveEarnStrategy`：VIP 專屬點數計算
+
+**整合點**：由 `PointService::earnWithStrategy()` 負責整合策略模式與核心交易流程。
+
+### Strategy Pattern 架構圖
+
+```mermaid
+flowchart TD
+    A[PointService] --> B[PointEarnStrategy]
+    B --> C[Calculate Points]
+    C --> D[DB Transaction]
+    D --> E[PointAccount]
+    D --> F[PointLot]
+    D --> G[Domain Event]
+    G --> H[Outbox]
+    H --> I[ProcessOutboxEvent]
+    I --> J[Event Listener / Integration]
+```
 
 ---
 
