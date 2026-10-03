@@ -6,6 +6,9 @@ if [ ! -f /var/www/vendor/autoload.php ]; then
     composer install --no-scripts
 fi
 
+# 清除 Laravel 舊有快取，避免 Docker Volume 保留舊 cache 導致警告
+php artisan optimize:clear
+
 # 確保 Laravel 必要目錄的權限正確（僅處理必要目錄，不遞迴整個 storage）
 REQUIRED_DIRS="/var/www/storage
 /var/www/storage/logs
