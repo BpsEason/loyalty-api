@@ -59,6 +59,8 @@ class DatabaseSeeder extends Seeder
          */
         $this->ensureAllPermissionsExist();
 
+        // 先清除既有權限，避免重複插入錯誤
+        $superAdminRole->permissions()->detach();
         $superAdminRole->syncPermissions(Permission::all());
 
         $superAdmin = User::updateOrCreate(
@@ -184,6 +186,8 @@ class DatabaseSeeder extends Seeder
             /*
              * Tenant Admin 擁有全部目前建立的 Permission
              */
+            // 先清除既有權限，避免重複插入錯誤
+            $tenantAdminRole->permissions()->detach();
             $tenantAdminRole->syncPermissions(Permission::all());
 
             /*
@@ -200,6 +204,8 @@ class DatabaseSeeder extends Seeder
                 'View::Reward',
             ])->get();
 
+            // 先清除既有權限，避免重複插入錯誤
+            $tenantStaffRole->permissions()->detach();
             $tenantStaffRole->syncPermissions($basicPermissions);
 
             /*

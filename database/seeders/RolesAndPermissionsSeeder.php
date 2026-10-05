@@ -39,6 +39,8 @@ class RolesAndPermissionsSeeder extends Seeder
         );
 
         // Super Admin 同步全域所有權限
+        // 先清除既有權限，避免重複插入錯誤
+        $superAdmin->permissions()->detach();
         $superAdmin->syncPermissions(Permission::all());
 
         // 4. 為每個現有的 Tenant 獨立建立角色與權限分配 (Tenant Scoped)
@@ -114,6 +116,8 @@ class RolesAndPermissionsSeeder extends Seeder
         );
 
         // 為該租戶的 tenant_admin 角色綁定所有可用權限
+        // 先清除既有權限，避免重複插入錯誤
+        $tenantAdmin->permissions()->detach();
         $tenantAdmin->syncPermissions(Permission::all());
 
         // 為該租戶的 tenant_staff 角色綁定基本檢視權限
@@ -129,6 +133,8 @@ class RolesAndPermissionsSeeder extends Seeder
         ];
 
         $basicPermissions = Permission::whereIn('name', $basicPermissionNames)->get();
+        // 先清除既有權限，避免重複插入錯誤
+        $tenantStaff->permissions()->detach();
         $tenantStaff->syncPermissions($basicPermissions);
     }
 }

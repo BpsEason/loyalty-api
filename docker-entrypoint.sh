@@ -1,37 +1,34 @@
 #!/bin/sh
 set -e
 
-# 當外部 Volume 掛載導致 vendor 遺失時的補救措施
+# 1. 確保 terminal 變數存在，避免快捷鍵與方向鍵失效
+export TERM=${TERM:-xterm-256color}
+
+# 2. 當外部 Volume 掛載導致 vendor 遺失時的補救措施
 if [ ! -f /var/www/vendor/autoload.php ]; then
-    composer install --no-scripts
+    echo "vendor/autoload.php not found. Running composer install..."
+    composer install --no-interaction --prefer-dist --optimize-autoloader --no-scripts
 fi
 
-# 確保 Laravel 必要目錄存在
-REQUIRED_DIRS="/var/www/storage
+# 3. 確保 Laravel 必要目錄存在
+REQUIRED_DIRS="
 /var/www/storage/logs
-/var/www/storage/framework
-/var/www/storage/framework/cache
+/var/www/storage/framework/cache/data
 /var/www/storage/framework/sessions
 /var/www/storage/framework/views
-/var/www/bootstrap/cache"
+/var/www/bootstrap/cache
+"
 
 for dir in $REQUIRED_DIRS; do
-    mkdir -p "$dir"
-    chown www-data:www-data "$dir"
-    chmod 755 "$dir"
+    if [ ! -d "$dir" ]; then
+        mkdir -p "$dir"
+    fi
 done
 
-# 確保日誌檔案本身的權限正確
-if [ -f /var/www/storage/logs/laravel.log ]; then
-    chown www-data:www-data /var/www/storage/logs/laravel.log
-    chmod 664 /var/www/storage/logs/laravel.log
+# 4. 安全清除設定快取（避免無 .env 時造成 set -e 觸發崩潰）
+if [ -f /var/www/.env ]; then
+    php artisan config:clear || true
 fi
 
-# 清除 Laravel 設定快取
-php artisan config:clear
-
-# 開發環境：執行資料庫 Migration + Seeder
-php artisan migrate --seed
-
-# 直接接管 process
+# 5. 直接接管 process
 exec "$@"

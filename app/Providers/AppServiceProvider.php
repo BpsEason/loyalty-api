@@ -68,20 +68,6 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
         });
 
-        // 🔍 啟用查詢日誌，專門追蹤角色相關查詢
-        if (app()->environment('local')) {
-            DB::listen(function ($query) {
-                if (str_contains($query->sql, 'roles') || str_contains($query->sql, 'model_has_roles')) {
-                    Log::debug('=== Role Query Debug ===', [
-                        'sql' => $query->sql,
-                        'bindings' => $query->bindings,
-                        'permissions_team_id' => app(\Spatie\Permission\PermissionRegistrar::class)->getPermissionsTeamId(),
-                        'filament_tenant' => filament()->getTenant()?->id,
-                    ]);
-                }
-            });
-        }
-
         // 🎯 確保在同步使用者角色時，pivot 表的 team_id 正確設置為使用者的 tenant_id
         \Illuminate\Support\Facades\Event::listen(\Spatie\Permission\Events\SyncingRoles::class, function ($event) {
             $model = $event->model;
