@@ -7,9 +7,14 @@ services:
     restart: unless-stopped
     working_dir: /var/www
 
+    stdin_open: true
+    tty: true
+
     volumes:
       - ./:/var/www
       - vendor:/var/www/vendor
+    #  - storage:/var/www/storage
+    #  - bootstrap-cache:/var/www/bootstrap/cache
 
     depends_on:
       redis:
@@ -43,6 +48,9 @@ services:
     restart: unless-stopped
     working_dir: /var/www
 
+    stdin_open: true
+    tty: true
+
     volumes:
       - ./:/var/www
       - vendor:/var/www/vendor
@@ -73,7 +81,7 @@ services:
       - loyalty-network
 
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -85,6 +93,9 @@ services:
     container_name: loyalty-reverb
     restart: unless-stopped
     working_dir: /var/www
+
+    stdin_open: true
+    tty: true
 
     volumes:
       - ./:/var/www

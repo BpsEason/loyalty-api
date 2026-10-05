@@ -27,8 +27,11 @@ if [ -f /var/www/storage/logs/laravel.log ]; then
     chmod 664 /var/www/storage/logs/laravel.log
 fi
 
-# 清除 Laravel 舊有快取
-php artisan optimize:clear
+# 清除 Laravel 設定快取
+php artisan config:clear
+
+# 開發環境：執行資料庫 Migration + Seeder
+php artisan migrate --seed
 
 # 直接接管 process
 exec "$@"
