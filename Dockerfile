@@ -1,6 +1,11 @@
 FROM php:8.4-fpm
 
-# 安裝系統依賴與開發工具
+# 1. 補全終端機與快捷鍵相關環境變數
+ENV TERM=xterm-256color \
+    SHELL=/bin/bash \
+    COMPOSER_ALLOW_SUPERUSER=1
+
+# 2. 安裝系統依賴、開發工具與網路檢測工具 (netcat-openbsd)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -15,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     iputils-ping \
     net-tools \
+    netcat-openbsd \
     libpng-dev \
     libjpeg62-turbo-dev \
     libfreetype6-dev \
@@ -29,9 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     && rm -rf /var/lib/apt/lists/*
 
-# 設定 GD 擴展選項並安裝 PHP 擴展
+# 3. 設定 GD 擴展選項並安裝 PHP 擴展
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install \
+    && docker-php-ext-install -j$(nproc) \
     pdo_mysql \
     mbstring \
     zip \
@@ -41,14 +47,11 @@ RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     pcntl \
     intl
 
-# 啟用 OPcache
-RUN docker-php-ext-enable opcache
-
-# 安裝 Redis 擴展（PhpRedis）
+# 4. 啟用 OPcache 與安裝 Redis 擴展
 RUN pecl install redis \
-    && docker-php-ext-enable redis
+    && docker-php-ext-enable redis opcache
 
-# 設定基礎 OPcache 配置
+# 5. 設定基礎 OPcache 配置
 RUN { \
     echo 'opcache.enable=1'; \
     echo 'opcache.memory_consumption=256'; \
@@ -58,23 +61,22 @@ RUN { \
     echo 'opcache.revalidate_freq=0'; \
     } > /usr/local/etc/php/conf.d/opcache.ini
 
-# 安裝 Composer
+# 6. 安裝 Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www
 
-# 1. 複製 Composer 宣告檔
+# 7. 複製 Composer 宣告檔並預先安裝依賴
 COPY composer.json composer.lock ./
-
-# 2. 安裝依賴（不執行 post-autoload-dump 腳本，避免觸發 discover）
 RUN composer install \
     --no-scripts \
-    --no-autoloader
+    --no-autoloader \
+    --no-interaction
 
-# 3. 複製專案原始碼
+# 8. 複製專案原始碼
 COPY . .
 
-# 4. 建立必要目錄與設定權限
+# 9. 建立必要目錄與設定權限
 RUN mkdir -p \
     /var/www/storage/framework/cache \
     /var/www/storage/framework/sessions \
@@ -84,15 +86,14 @@ RUN mkdir -p \
     && chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache \
     && chmod -R 775 /var/www/storage /var/www/bootstrap/cache
 
-# 5. 純粹產生 Class map autoload，完全不在 Build 階段執行 artisan
+# 10. 產生 Class map autoload
 RUN composer dump-autoload --optimize --no-scripts
 
-# 複製 ENTRYPOINT 腳本
+# 11. 複製 ENTRYPOINT 腳本
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 9000
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-
 CMD ["php-fpm"]

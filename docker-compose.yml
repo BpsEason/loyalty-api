@@ -6,18 +6,21 @@ services:
     container_name: loyalty-app
     restart: unless-stopped
     working_dir: /var/www
-
     stdin_open: true
     tty: true
-
     volumes:
       - ./:/var/www
       - vendor:/var/www/vendor
-
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - TERM=xterm-256color
+      - SHELL=/bin/bash
+      - DB_HOST=host.docker.internal
+      - DB_PORT=3306
     depends_on:
       redis:
         condition: service_healthy
-
     networks:
       - loyalty-network
 
@@ -27,14 +30,13 @@ services:
     restart: unless-stopped
     ports:
       - "8088:80"
-
     volumes:
       - ./:/var/www
       - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
-
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - app
-
     networks:
       - loyalty-network
 
@@ -45,20 +47,15 @@ services:
     container_name: loyalty-queue-worker
     restart: unless-stopped
     working_dir: /var/www
-
-    stdin_open: true
-    tty: true
-
     volumes:
       - ./:/var/www
       - vendor:/var/www/vendor
-
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
-
-    command: php artisan queue:work --tries=3
-
+    command: php artisan queue:work --tries=3 --timeout=90
     networks:
       - loyalty-network
 
@@ -66,16 +63,12 @@ services:
     image: redis:7-alpine
     container_name: loyalty-redis
     restart: unless-stopped
-
     ports:
       - "6379:6379"
-
     volumes:
       - redis-data:/data
-
     networks:
       - loyalty-network
-
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -89,23 +82,17 @@ services:
     container_name: loyalty-reverb
     restart: unless-stopped
     working_dir: /var/www
-
-    stdin_open: true
-    tty: true
-
     volumes:
       - ./:/var/www
       - vendor:/var/www/vendor
-
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
-
     command: php artisan reverb:start --host=0.0.0.0 --port=8080
-
     ports:
       - "8888:8080"
-
     networks:
       - loyalty-network
 
@@ -116,6 +103,5 @@ networks:
 volumes:
   vendor:
     driver: local
-
   redis-data:
     driver: local
